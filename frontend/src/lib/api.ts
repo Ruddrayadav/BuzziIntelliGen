@@ -36,13 +36,24 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const isFormData = init.body instanceof FormData;
-  const response = await fetch(`${import.meta.env.VITE_API_URL ?? ""}${path}`, {
-    credentials: "include",
-    ...init,
-    headers: { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...init.headers },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${import.meta.env.VITE_API_URL ?? ""}${path}`, {
+      credentials: "include",
+      ...init,
+      headers: { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...init.headers },
+    });
+  } catch {
+    throw new ApiError("We cannot reach the BizIntel server. Start the API, then try again.", 0);
+  }
   if (response.status === 204) return undefined as T;
-  const body = await response.json().catch(() => ({ message: "The server returned an unexpected response." }));
+  const body = await response.json().catch(() => null);
+  if (body === null) {
+    const message = response.status >= 502
+      ? "The BizIntel server is not running. Start it, then try again."
+      : "The server returned an invalid response. Please try again.";
+    throw new ApiError(message, response.status);
+  }
   if (!response.ok) throw new ApiError(body.message ?? "We could not complete that request.", response.status);
   return body as T;
 }
