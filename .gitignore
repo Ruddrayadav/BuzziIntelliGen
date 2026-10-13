@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Database (generated at runtime)
+data/biz_intelligence.db
+data/biz_intelligence.db-shm
+data/biz_intelligence.db-wal
+
+# Uploaded files (user data, never commit)
+data/uploads/
+
+# Environment variables (may contain secrets)
+.env
+
+# Streamlit
+.streamlit/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp

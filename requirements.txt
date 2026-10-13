@@ -1,0 +1,40 @@
+# ============================================================
+# requirements.txt
+# BizIntel — AI-Powered Business Intelligence System
+# Python 3.11
+# ============================================================
+# Install with:  pip install -r requirements.txt
+
+# ── UI ───────────────────────────────────────────────────────
+streamlit>=1.35.0           # The web UI framework
+
+# ── Data processing ──────────────────────────────────────────
+pandas>=2.2.0               # DataFrames for cleaning and analysis
+openpyxl>=3.1.0             # Read .xlsx files (pandas needs this)
+xlrd>=2.0.1                 # Read legacy .xls files
+
+# ── Database ─────────────────────────────────────────────────
+sqlalchemy>=2.0.0           # ORM + query builder; abstracts SQLite/PostgreSQL
+# (no extra driver needed for SQLite — it's built into Python)
+# When switching to PostgreSQL, add:  psycopg2-binary>=2.9.0
+
+# ── Settings ─────────────────────────────────────────────────
+pydantic>=2.0.0             # Data validation and typed settings
+pydantic-settings>=2.0.0   # BaseSettings — reads from .env files
+
+# ── LLM / AI ─────────────────────────────────────────────────
+langchain>=0.2.0            # Prompt templates + structured output parsing only
+langchain-ollama>=0.1.0     # LangChain connector for Ollama (local models)
+
+# ── SQL Safety (Phase 4) ─────────────────────────────────────
+sqlglot>=23.0.0             # Parse and validate SQL before running it
+
+# ── Charts ───────────────────────────────────────────────────
+plotly>=5.22.0              # Interactive charts (works in both Streamlit and JS)
+
+# ── Testing ──────────────────────────────────────────────────
+pytest>=8.0.0               # Test runner
+pytest-cov>=5.0.0           # Coverage reports
+
+# ── Utilities ────────────────────────────────────────────────
+python-dateutil>=2.9.0      # Robust date parsing for messy date strings
