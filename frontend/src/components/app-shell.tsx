@@ -23,6 +23,6 @@ export function AppShell() {
         <div className="flex items-center gap-1"><span className="hidden text-sm text-muted sm:inline">{user?.business_name}</span><ThemeToggle /><Button variant="ghost" size="sm" onClick={() => logout.mutate(undefined, { onSuccess: () => navigate("/") })} aria-label="Log out"><LogOut size={17} /></Button></div>
       </div>
     </header>
-    <main className="page-wrap py-10"><Outlet /></main>
+    <main id="main-content" className="page-wrap py-10"><Outlet /></main>
   </div>;
 }
