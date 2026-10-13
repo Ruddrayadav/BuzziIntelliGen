@@ -8,6 +8,13 @@
 # ── UI ───────────────────────────────────────────────────────
 streamlit>=1.35.0           # The web UI framework
 
+# ── HTTP API ─────────────────────────────────────────────────
+fastapi>=0.115.0            # Thin HTTP layer around the existing services
+uvicorn[standard]>=0.30.0   # Development server for the FastAPI app
+python-multipart>=0.0.9     # Parses CSV/Excel multipart form uploads
+itsdangerous>=2.2.0         # Signs the browser's httpOnly session cookie
+httpx>=0.27.0               # FastAPI TestClient dependency for API tests
+
 # ── Data processing ──────────────────────────────────────────
 pandas>=2.2.0               # DataFrames for cleaning and analysis
 openpyxl>=3.1.0             # Read .xlsx files (pandas needs this)
