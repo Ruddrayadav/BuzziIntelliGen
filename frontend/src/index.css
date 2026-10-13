@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --surface: 0 0% 100%;
+    --page: 210 40% 98%;
+    --line: 214 32% 91%;
+    --muted: 215 16% 47%;
+    --ink: 222 47% 11%;
+    --brand: 221 83% 53%;
+    --brand-contrast: 0 0% 100%;
+  }
+
+  .dark {
+    --surface: 222 47% 11%;
+    --page: 222 47% 8%;
+    --line: 217 33% 22%;
+    --muted: 215 20% 65%;
+    --ink: 210 40% 98%;
+    --brand: 217 91% 65%;
+    --brand-contrast: 222 47% 11%;
+  }
+
+  * { @apply border-line; }
+  html { @apply bg-[hsl(var(--page))] text-ink; }
+  body { @apply min-h-screen bg-[hsl(var(--page))] font-sans antialiased; }
+  button, a, input { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-[hsl(var(--page))]; }
+}
+
+@layer components {
+  .page-wrap { @apply mx-auto w-full max-w-6xl px-5 sm:px-8; }
+  .card { @apply rounded-2xl border bg-surface shadow-card; }
+  .eyebrow { @apply text-sm font-semibold tracking-wide text-brand; }
+}
