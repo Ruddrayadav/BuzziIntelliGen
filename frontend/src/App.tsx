@@ -1,13 +1,12 @@
-import { Bot } from "lucide-react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/components/app-shell";
 import { ProtectedRoute } from "@/components/protected-route";
 import { LandingPage } from "@/pages/landing";
 import { LoginPage, RegisterPage } from "@/pages/auth";
-import { PlaceholderPage } from "@/pages/placeholder";
 import { UploadPage } from "@/pages/upload";
 import { DashboardPage } from "@/pages/dashboard";
+import { AskPage } from "@/pages/ask";
 import { AuthProvider } from "@/providers/auth-provider";
 import { QueryProvider } from "@/providers/query-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -24,7 +23,7 @@ export function App() {
     <Route element={<ProtectedShell />}>
       <Route path="/upload" element={<UploadPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
-      <Route path="/ask" element={<PlaceholderPage icon={Bot} title="Ask about your business" description="The Ask AI conversation experience arrives in a later step." />} />
+      <Route path="/ask" element={<AskPage />} />
     </Route>
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes></BrowserRouter></AuthProvider></ThemeProvider></QueryProvider>;

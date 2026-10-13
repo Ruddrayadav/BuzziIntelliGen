@@ -104,6 +104,12 @@ export type ProfitDiagnosis = {
   waterfall_df: Array<{ measure: string; label: string; value: number }>;
 };
 
+export type AskAnswer = {
+  text: string;
+  intent: string;
+  table: { columns: string[]; rows: Array<Record<string, unknown>> };
+};
+
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -157,6 +163,7 @@ export const api = {
   compare: (currentMonth?: string, priorMonth?: string) => request<PeriodComparison | null>(`/api/analytics/compare${monthsQuery(currentMonth, priorMonth)}`),
   anomalies: () => request<AnomalyReport>("/api/analytics/anomalies"),
   diagnosis: (currentMonth?: string, priorMonth?: string) => request<ProfitDiagnosis | null>(`/api/analytics/diagnosis${monthsQuery(currentMonth, priorMonth)}`),
+  ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
 
 function monthsQuery(currentMonth?: string, priorMonth?: string) {
