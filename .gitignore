@@ -38,5 +38,10 @@ htmlcov/
 *.swp
 
 # React / Vite
+node_modules/
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+frontend/.env
+frontend/.env.local
+*.log
