@@ -28,6 +28,82 @@ export type UploadResult = {
   warnings: string[];
 };
 
+export type DashboardData = {
+  total_revenue: number;
+  total_expenses: number;
+  net_profit: number;
+  average_order_value: number;
+  revenue_trend: Array<{ date: string; revenue: number }>;
+  top_products: Array<{ product: string; revenue: number }>;
+  expense_breakdown: Array<{ category: string; amount: number }>;
+};
+
+export type PeriodSummary = {
+  period_label: string;
+  revenue: number;
+  expenses: number;
+  net_profit: number;
+  order_count: number;
+  average_order_value: number;
+  profit_margin_pct: number;
+};
+
+export type PeriodComparison = {
+  current: PeriodSummary;
+  prior: PeriodSummary;
+  revenue_delta: number;
+  revenue_delta_pct: number;
+  expense_delta: number;
+  expense_delta_pct: number;
+  profit_delta: number;
+  profit_delta_pct: number;
+  aov_delta: number;
+  aov_delta_pct: number;
+  margin_delta_pct: number;
+  product_shifts: Array<Record<string, unknown>>;
+  expense_shifts: Array<Record<string, unknown>>;
+  top_gainers: Array<Record<string, unknown>>;
+  top_decliners: Array<Record<string, unknown>>;
+};
+
+export type Anomaly = {
+  date: string;
+  metric: string;
+  actual_value: number;
+  expected_value: number;
+  deviation: number;
+  deviation_pct: number;
+  z_score: number;
+  anomaly_type: string;
+  severity: "critical" | "warning" | "info";
+  description: string;
+};
+
+export type AnomalyReport = {
+  total_anomalies: number;
+  revenue_anomalies: Anomaly[];
+  expense_anomalies: Anomaly[];
+  timeline_df: Array<Record<string, unknown>>;
+};
+
+export type ProfitDiagnosis = {
+  period_label: string;
+  comparison_label: string;
+  prior_profit: number;
+  current_profit: number;
+  profit_change: number;
+  profit_change_pct: number;
+  is_profit_down: boolean;
+  primary_driver: string;
+  revenue_impact: number;
+  expense_impact: number;
+  top_revenue_drags: Array<Record<string, unknown>>;
+  top_expense_surges: Array<Record<string, unknown>>;
+  key_insights: string[];
+  recommendations: string[];
+  waterfall_df: Array<{ measure: string; label: string; value: number }>;
+};
+
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -76,4 +152,17 @@ export const api = {
     form.append("mapping", JSON.stringify(mapping));
     return request<UploadResult>("/api/upload/commit", { method: "POST", body: form });
   },
+  dashboard: () => request<DashboardData>("/api/dashboard"),
+  months: () => request<{ months: string[] }>("/api/analytics/months"),
+  compare: (currentMonth?: string, priorMonth?: string) => request<PeriodComparison | null>(`/api/analytics/compare${monthsQuery(currentMonth, priorMonth)}`),
+  anomalies: () => request<AnomalyReport>("/api/analytics/anomalies"),
+  diagnosis: (currentMonth?: string, priorMonth?: string) => request<ProfitDiagnosis | null>(`/api/analytics/diagnosis${monthsQuery(currentMonth, priorMonth)}`),
 };
+
+function monthsQuery(currentMonth?: string, priorMonth?: string) {
+  const params = new URLSearchParams();
+  if (currentMonth) params.set("current_month", currentMonth);
+  if (priorMonth) params.set("prior_month", priorMonth);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
