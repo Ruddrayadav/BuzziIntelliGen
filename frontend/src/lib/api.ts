@@ -151,11 +151,12 @@ export const api = {
     if (fileType) form.append("file_type", fileType);
     return request<UploadPreview>("/api/upload/preview", { method: "POST", body: form });
   },
-  commitUpload: (file: File, fileType: FileType, mapping: Record<string, string>) => {
+  commitUpload: (file: File, fileType: FileType, mapping: Record<string, string>, replace = false) => {
     const form = new FormData();
     form.append("file", file);
     form.append("file_type", fileType);
     form.append("mapping", JSON.stringify(mapping));
+    if (replace) form.append("replace", "true");
     return request<UploadResult>("/api/upload/commit", { method: "POST", body: form });
   },
   dashboard: () => request<DashboardData>("/api/dashboard"),

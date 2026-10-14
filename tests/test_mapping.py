@@ -24,6 +24,7 @@ from services.mapping_service import (
     _normalize_col,
     apply_mapping,
     suggest_mapping,
+    validate_confirmed_mapping,
 )
 
 
@@ -363,3 +364,73 @@ class TestFullPipeline:
         result = clean_dataframe(standard_df, "expenses")
         assert result.success
         assert result.clean_count > 0
+
+
+class TestValidateConfirmedMapping:
+    def test_valid_sales_mapping_passes(self):
+        raw_cols = ["SaleDate", "ItemName", "TotalAmount", "Category"]
+        mapping = {
+            "SaleDate": "date",
+            "ItemName": "product",
+            "TotalAmount": "revenue",
+            "Category": "category",
+        }
+        # Should not raise
+        validate_confirmed_mapping(mapping, "sales", raw_cols)
+
+    def test_valid_expenses_mapping_passes(self):
+        raw_cols = ["TxDate", "ExpCat", "Cost"]
+        mapping = {
+            "TxDate": "date",
+            "ExpCat": "category",
+            "Cost": "amount",
+        }
+        # Should not raise
+        validate_confirmed_mapping(mapping, "expenses", raw_cols)
+
+    def test_missing_required_column_raises(self):
+        raw_cols = ["SaleDate", "ItemName"]
+        mapping = {
+            "SaleDate": "date",
+            "ItemName": "product",
+            # missing "revenue"
+        }
+        with pytest.raises(ValueError, match="Missing required field"):
+            validate_confirmed_mapping(mapping, "sales", raw_cols)
+
+    def test_duplicate_target_field_raises(self):
+        raw_cols = ["ColA", "ColB", "DateCol", "ProdCol"]
+        mapping = {
+            "DateCol": "date",
+            "ProdCol": "product",
+            "ColA": "revenue",
+            "ColB": "revenue",  # duplicate target
+        }
+        with pytest.raises(ValueError, match="Multiple columns were mapped to the same field"):
+            validate_confirmed_mapping(mapping, "sales", raw_cols)
+
+    def test_illegal_target_field_raises(self):
+        raw_cols = ["DateCol", "ProdCol", "RevCol", "UnknownCol"]
+        mapping = {
+            "DateCol": "date",
+            "ProdCol": "product",
+            "RevCol": "revenue",
+            "UnknownCol": "super_custom_field",
+        }
+        with pytest.raises(ValueError, match="is not an allowed standard field"):
+            validate_confirmed_mapping(mapping, "sales", raw_cols)
+
+    def test_raw_column_not_in_file_raises(self):
+        raw_cols = ["DateCol", "ProdCol"]
+        mapping = {
+            "DateCol": "date",
+            "ProdCol": "product",
+            "GhostCol": "revenue",
+        }
+        with pytest.raises(ValueError, match="does not exist in the uploaded file"):
+            validate_confirmed_mapping(mapping, "sales", raw_cols)
+
+    def test_invalid_file_type_raises(self):
+        with pytest.raises(ValueError, match="Invalid file type"):
+            validate_confirmed_mapping({"Col": "date"}, "inventory", ["Col"])
+

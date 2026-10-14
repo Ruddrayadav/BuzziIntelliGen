@@ -99,6 +99,10 @@ class UploadLog(Base):
     # "sales" or "expenses"
     file_type = Column(String(20), nullable=False)
 
+    # SHA-256 hash of the uploaded file bytes for duplicate detection per tenant
+    file_hash = Column(String(64), nullable=True, index=True)
+
+
     # How many rows were in the raw uploaded file?
     row_count_raw = Column(Integer, nullable=True)
 

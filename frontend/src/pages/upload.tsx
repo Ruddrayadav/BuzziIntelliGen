@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { api, ApiError, type FileType, type UploadPreview, type UploadResult } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type UploadStatus = "checking" | "ready" | "importing" | "done" | "error";
+type UploadStatus = "checking" | "ready" | "importing" | "conflict" | "done" | "error";
 type UploadEntry = {
   id: string;
   file: File;
@@ -17,6 +17,7 @@ type UploadEntry = {
   mapping: Record<string, string | null>;
   result?: UploadResult;
   error?: string;
+  conflictMessage?: string;
 };
 
 const fields: Record<FileType, Array<{ value: string; label: string }>> = {
@@ -89,18 +90,39 @@ export function UploadPage() {
     if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files);
   }
 
-  async function importFiles() {
-    for (const entry of uploads.filter((item) => item.status === "ready" && item.selectedType)) {
-      updateEntry(entry.id, (item) => ({ ...item, status: "importing", error: undefined }));
-      try {
-        const mapping: Record<string, string> = {};
-        Object.entries(entry.mapping).forEach(([raw, value]) => { if (value) mapping[raw] = value; });
-        const result = await api.commitUpload(entry.file, entry.selectedType!, mapping);
-        updateEntry(entry.id, (item) => ({ ...item, status: "done", result }));
-      } catch (reason) {
+  async function importSingleFile(entry: UploadEntry, replace = false) {
+    if (!entry.selectedType) return;
+    updateEntry(entry.id, (item) => ({ ...item, status: "importing", error: undefined, conflictMessage: undefined }));
+    try {
+      const mapping: Record<string, string> = {};
+      Object.entries(entry.mapping).forEach(([raw, value]) => { if (value) mapping[raw] = value; });
+      const result = await api.commitUpload(entry.file, entry.selectedType, mapping, replace);
+      updateEntry(entry.id, (item) => ({ ...item, status: "done", result }));
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 409) {
+        updateEntry(entry.id, (item) => ({
+          ...item,
+          status: "conflict",
+          conflictMessage: reason.message,
+        }));
+      } else {
         updateEntry(entry.id, (item) => ({ ...item, status: "error", error: messageFor(reason) }));
       }
     }
+  }
+
+  async function importFiles() {
+    for (const entry of uploads.filter((item) => item.status === "ready" && item.selectedType)) {
+      await importSingleFile(entry, false);
+    }
+  }
+
+  function skipEntry(id: string) {
+    setUploads((current) => current.filter((entry) => entry.id !== id));
+  }
+
+  function replaceEntry(entry: UploadEntry) {
+    void importSingleFile(entry, true);
   }
 
   const active = uploads.some((entry) => entry.status === "checking" || entry.status === "importing");
@@ -143,6 +165,8 @@ export function UploadPage() {
           onTypeChange={(fileType) => void loadPreview(entry.id, entry.file, fileType)}
           onMappingChange={(raw, mapped) => updateEntry(entry.id, (item) => ({ ...item, mapping: { ...item.mapping, [raw]: mapped || null } }))}
           onRetry={() => void loadPreview(entry.id, entry.file, entry.selectedType)}
+          onSkip={skipEntry}
+          onReplace={replaceEntry}
         />
       ))}
       {hasReady && (
@@ -160,6 +184,7 @@ export function UploadPage() {
       )}
     </div>}
 
+
     {hasDone && <div className="mt-10 space-y-5"><div><p className="eyebrow">Import complete</p><h2 className="mt-2 text-2xl font-bold">Your files are ready to use.</h2></div>{uploads.filter((entry) => entry.status === "done" && entry.result).map((entry) => <ReconciliationCard key={entry.id} result={entry.result!} />)}<Button onClick={() => navigate("/dashboard")}>Go to dashboard</Button></div>}
   </section>;
 }
@@ -174,9 +199,44 @@ function Stepper({ step }: { step: number }) {
   })}</ol>;
 }
 
-function FileReview({ entry, onTypeChange, onMappingChange, onRetry }: { entry: UploadEntry; onTypeChange: (type: FileType) => void; onMappingChange: (raw: string, mapped: string) => void; onRetry: () => void }) {
+function FileReview({
+  entry,
+  onTypeChange,
+  onMappingChange,
+  onRetry,
+  onSkip,
+  onReplace,
+}: {
+  entry: UploadEntry;
+  onTypeChange: (type: FileType) => void;
+  onMappingChange: (raw: string, mapped: string) => void;
+  onRetry: () => void;
+  onSkip: (id: string) => void;
+  onReplace: (entry: UploadEntry) => void;
+}) {
   if (entry.status === "checking") return <Card className="flex items-center gap-3 p-5"><LoaderCircle className="animate-spin text-brand" size={20} /><p>Checking <strong>{entry.file.name}</strong>…</p></Card>;
   if (entry.status === "importing") return <Card className="flex items-center gap-3 p-5"><LoaderCircle className="animate-spin text-brand" size={20} /><p>Importing <strong>{entry.file.name}</strong>…</p></Card>;
+  if (entry.status === "conflict") {
+    return (
+      <Card className="border-amber-300 bg-amber-50/50 p-5 dark:border-amber-900 dark:bg-amber-950/20">
+        <div className="flex gap-3">
+          <AlertCircle className="shrink-0 text-amber-600 dark:text-amber-400" size={22} />
+          <div className="space-y-2">
+            <p className="font-semibold text-ink">File already imported</p>
+            <p className="text-sm text-muted">{entry.conflictMessage ?? "This file has already been imported for your business."}</p>
+            <div className="flex flex-wrap gap-2 pt-2">
+              <Button size="sm" variant="default" onClick={() => onReplace(entry)}>
+                Replace previous import
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => onSkip(entry.id)}>
+                Skip this file
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Card>
+    );
+  }
   if (entry.status === "error") return <Card className="border-red-200 p-5 dark:border-red-900"><div className="flex gap-3"><AlertCircle className="shrink-0 text-red-600" size={20} /><div><p className="font-semibold">We could not check {entry.file.name}</p><p className="mt-1 text-sm text-muted">{entry.error}</p><Button className="mt-4" size="sm" variant="outline" onClick={onRetry}>Try again</Button></div></div></Card>;
   if (entry.status === "done") return null;
   const preview = entry.preview!;

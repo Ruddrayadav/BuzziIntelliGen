@@ -155,7 +155,14 @@ class TestExecuteUpload:
         from db.database import get_db
         from db.models import UploadLog
         with get_db() as db:
-            db.query(UploadLog).filter_by(tenant_id=self.TENANT).delete()
+            logs = (
+                db.query(UploadLog)
+                .filter(UploadLog.tenant_id.in_([self.TENANT, "tenant_b_pytest"]))
+                .all()
+            )
+            for log in logs:
+                db.delete(log)
+            db.commit()
 
     def setup_method(self):
         """Initialise DB tables and clean up any leftovers before each test."""
@@ -332,3 +339,92 @@ class TestExecuteUpload:
             error_message="Something went wrong",
         )
         assert "failed" in result.summary().lower()
+
+    # ── Duplicate detection & Replace behavior ────────────────────────────────
+    def test_duplicate_file_hash_detected(self):
+        from services.upload_service import execute_upload, suggest_mapping_from_file
+
+        data = _read_bytes("sample_sales.csv")
+        preview = suggest_mapping_from_file(data, "sample_sales.csv", "sales", use_llm=False)
+        confirmed = preview.suggested.to_rename_dict()
+        file_hash = "fake_sha256_hash_1234567890abcdef"
+
+        # First upload succeeds
+        res1 = execute_upload(
+            preview.raw_df, confirmed, "sales", "sample_sales.csv", self.TENANT, file_hash=file_hash
+        )
+        assert res1.success is True
+        assert res1.is_duplicate is False
+
+        # Second upload with same hash detects duplicate
+        res2 = execute_upload(
+            preview.raw_df, confirmed, "sales", "sample_sales.csv", self.TENANT, file_hash=file_hash, replace_existing=False
+        )
+        assert res2.success is False
+        assert res2.is_duplicate is True
+        assert res2.existing_upload_id == res1.upload_log_id
+        assert "already been imported" in res2.error_message
+
+    def test_duplicate_file_hash_replace_succeeds(self):
+        from db.database import SessionLocal
+        from db.models import Sales, UploadLog
+        from services.upload_service import execute_upload, suggest_mapping_from_file
+
+        data = _read_bytes("sample_sales.csv")
+        preview = suggest_mapping_from_file(data, "sample_sales.csv", "sales", use_llm=False)
+        confirmed = preview.suggested.to_rename_dict()
+        file_hash = "replace_hash_abcdef1234567890"
+
+        # First upload
+        res1 = execute_upload(
+            preview.raw_df, confirmed, "sales", "sample_sales.csv", self.TENANT, file_hash=file_hash
+        )
+        assert res1.success is True
+
+        db = SessionLocal()
+        try:
+            count1 = db.query(Sales).filter_by(tenant_id=self.TENANT).count()
+            assert count1 == res1.clean_count
+        finally:
+            db.close()
+
+        # Second upload with replace_existing=True
+        res2 = execute_upload(
+            preview.raw_df, confirmed, "sales", "sample_sales.csv", self.TENANT, file_hash=file_hash, replace_existing=True
+        )
+        assert res2.success is True
+        assert res2.is_duplicate is False
+
+        db = SessionLocal()
+        try:
+            # Row count should be res2.clean_count, NOT count1 + res2.clean_count (no duplicates added!)
+            count2 = db.query(Sales).filter_by(tenant_id=self.TENANT).count()
+            assert count2 == res2.clean_count
+            # Exactly one UploadLog should exist for this tenant
+            logs = db.query(UploadLog).filter_by(tenant_id=self.TENANT).all()
+            assert len(logs) == 1
+            assert logs[0].id == res2.upload_log_id
+        finally:
+            db.close()
+
+    def test_duplicate_file_hash_tenant_isolation(self):
+        """If Tenant A uploads a file, Tenant B uploading the exact same file is NOT blocked."""
+        from services.upload_service import execute_upload, suggest_mapping_from_file
+
+        data = _read_bytes("sample_sales.csv")
+        preview = suggest_mapping_from_file(data, "sample_sales.csv", "sales", use_llm=False)
+        confirmed = preview.suggested.to_rename_dict()
+        shared_hash = "shared_sha256_hash_999999999"
+
+        res_a = execute_upload(
+            preview.raw_df, confirmed, "sales", "sales_a.csv", self.TENANT, file_hash=shared_hash
+        )
+        assert res_a.success is True
+
+        # Tenant B uploads the same hash
+        res_b = execute_upload(
+            preview.raw_df, confirmed, "sales", "sales_b.csv", "tenant_b_pytest", file_hash=shared_hash
+        )
+        assert res_b.success is True
+        assert res_b.is_duplicate is False
+

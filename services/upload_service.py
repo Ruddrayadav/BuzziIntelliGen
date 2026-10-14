@@ -44,6 +44,7 @@ from services.mapping_service import (
     ColumnMapping,
     apply_mapping,
     suggest_mapping,
+    validate_confirmed_mapping,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,8 @@ class UploadResult:
     rejected_revenue_excluded: float = 0.0
     warnings: list[str] = field(default_factory=list)
     error_message: Optional[str] = None
+    is_duplicate: bool = False
+    existing_upload_id: Optional[int] = None
 
     def summary(self) -> str:
         """One-line plain-language summary for the owner."""
@@ -360,6 +363,8 @@ def execute_upload(
     file_type: str,
     filename: str,
     tenant_id: str,
+    file_hash: Optional[str] = None,
+    replace_existing: bool = False,
 ) -> UploadResult:
     """
     Phase B of the upload: apply mapping, clean, and save to the database.
@@ -369,35 +374,53 @@ def execute_upload(
     during the upload flow.
 
     Steps:
+      0. Validate confirmed mapping server-side (required fields, no duplicates).
+      0.5 Check file_hash duplicate for this tenant; reject (409) or replace old import.
       1. Apply confirmed_mapping to raw_df → standard column names.
       2. Run cleaning pipeline → CleaningResult.
       3. If zero clean rows remain → return failure (don't write to DB).
-      4. Create UploadLog record.
+      4. Create UploadLog record (with file_hash).
       5. Bulk-insert Sales or Expenses rows linked to that UploadLog.
       6. Commit everything atomically (all or nothing).
       7. Return UploadResult.
-
-    ATOMICITY:
-      Steps 4-6 happen inside a single DB session. If step 5 fails midway,
-      the session rolls back and no partial data is saved. get_db() handles
-      this via its try/except/finally.
-
-    Args:
-        raw_df:            Raw DataFrame from Phase A (UploadPreview.raw_df).
-        confirmed_mapping: {raw_col: standard_col} approved by the owner.
-        file_type:         "sales" or "expenses"
-        filename:          Original filename for the UploadLog record.
-        tenant_id:         The logged-in owner's ID. Every saved row gets this.
-
-    Returns:
-        UploadResult with success status, counts, and human-readable summary.
     """
     # Ensure DB tables exist (idempotent — safe to call every time)
     init_db()
 
     raw_count = len(raw_df)
 
+    # ── Step 0.5: Duplicate detection via file_hash ───────────────────────────
+    if file_hash:
+        with get_db() as db:
+            existing = (
+                db.query(UploadLog)
+                .filter(UploadLog.tenant_id == tenant_id, UploadLog.file_hash == file_hash)
+                .first()
+            )
+            if existing and not replace_existing:
+                return UploadResult(
+                    success=False,
+                    upload_log_id=None,
+                    filename=filename,
+                    file_type=file_type,
+                    raw_count=raw_count,
+                    clean_count=0,
+                    raw_revenue=0.0,
+                    clean_revenue=0.0,
+                    duplicates_removed=0,
+                    invalid_removed=0,
+                    is_duplicate=True,
+                    existing_upload_id=existing.id,
+                    error_message=(
+                        f"This file has already been imported on {existing.uploaded_at.strftime('%d %b %Y')} "
+                        f"as '{existing.filename}'. You can skip it or replace the previous import."
+                    ),
+                )
+
     try:
+        # ── Step 0: Validate confirmed mapping server-side ────────────────────
+        validate_confirmed_mapping(confirmed_mapping, file_type, raw_df.columns.tolist())
+
         # ── Step 1: Apply confirmed mapping ──────────────────────────────────
         standard_df = apply_mapping(raw_df, confirmed_mapping)
         logger.info(
@@ -470,17 +493,30 @@ def execute_upload(
 
         # ── Steps 4-6: Write to DB atomically ────────────────────────────────
         with get_db() as db:
+            # If replacing an existing upload, remove previous UploadLog and cascaded rows
+            if file_hash and replace_existing:
+                old_logs = (
+                    db.query(UploadLog)
+                    .filter(UploadLog.tenant_id == tenant_id, UploadLog.file_hash == file_hash)
+                    .all()
+                )
+                for old_log in old_logs:
+                    db.delete(old_log)
+                db.flush()
+
             # Create the UploadLog record
             upload_log = UploadLog(
                 tenant_id=tenant_id,
                 filename=filename,
                 file_type=file_type,
+                file_hash=file_hash,
                 row_count_raw=raw_count,
                 row_count_clean=clean_result.clean_count,
                 status="success" if not clean_result.warnings else "partial",
                 notes="; ".join(clean_result.warnings) if clean_result.warnings else None,
             )
             db.add(upload_log)
+
 
             # db.flush() runs the INSERT and populates upload_log.id WITHOUT
             # committing. We need the ID to link Sales/Expenses rows to this log.

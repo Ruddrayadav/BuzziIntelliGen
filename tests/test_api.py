@@ -160,3 +160,101 @@ def test_dashboard_trend_endpoint():
         invalid_res = client.get("/api/dashboard/trend?granularity=hourly")
         assert invalid_res.status_code == 422
 
+
+def test_upload_content_length_limit():
+    sales_file = _sample_sales_file()
+    with TestClient(app) as client:
+        _register(client, "api_limit_user", "Limit Cafe")
+        # Oversized Content-Length header should trigger immediate 413
+        oversized_headers = {"content-length": str(15 * 1024 * 1024)}
+        res = client.post(
+            "/api/upload/preview",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            headers=oversized_headers,
+        )
+        assert res.status_code == 413
+        assert "too large" in res.json()["message"].lower()
+
+
+def test_upload_commit_mapping_validation():
+    sales_file = _sample_sales_file()
+    with TestClient(app) as client:
+        _register(client, "api_valid_user", "Validation Cafe")
+
+        # 1. Duplicate target mapping
+        dup_mapping = {
+            "order_id": "order_id",
+            "date": "date",
+            "item_name": "product",
+            "category": "revenue",  # duplicate target
+            "total": "revenue",     # duplicate target
+        }
+        res_dup = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(dup_mapping)},
+        )
+        assert res_dup.status_code == 400
+        assert "Multiple columns were mapped to the same field" in res_dup.json()["message"]
+
+        # 2. Missing required target (missing revenue)
+        missing_mapping = {
+            "order_id": "order_id",
+            "date": "date",
+            "item_name": "product",
+        }
+        res_missing = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(missing_mapping)},
+        )
+        assert res_missing.status_code == 400
+        assert "Missing required field(s)" in res_missing.json()["message"]
+
+
+def test_upload_duplicate_detection_and_replace():
+    sales_file = _sample_sales_file()
+    valid_mapping = {
+        "order_id": "order_id",
+        "date": "date",
+        "item_name": "product",
+        "category": "category",
+        "qty": "quantity",
+        "unit_price": "unit_price",
+        "total": "revenue",
+    }
+    with TestClient(app) as client:
+        _register(client, "api_dupe_user", "Dupe Cafe")
+
+        # 1. First upload succeeds
+        res1 = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(valid_mapping)},
+        )
+        assert res1.status_code == 200
+        assert res1.json()["success"] is True
+
+        # 2. Duplicate upload without replace returns 409 Conflict
+        res2 = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(valid_mapping)},
+        )
+        assert res2.status_code == 409
+        assert "already been imported" in res2.json()["message"]
+
+        # 3. Duplicate upload with replace=True succeeds with 200
+        res3 = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={
+                "file_type": "sales",
+                "mapping": json.dumps(valid_mapping),
+                "replace": "true",
+            },
+        )
+        assert res3.status_code == 200
+        assert res3.json()["success"] is True
+
+

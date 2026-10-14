@@ -118,6 +118,14 @@
   - Dynamic upload mapping validation: recomputes missing required fields as owner maps columns, warns on duplicate target fields, and disables "Import files" until mapping is clean.
   - Excel/CSV formula injection protection: neutralizes cells starting with `=`, `+`, `-`, or `@` by prefixing an apostrophe on CSV download.
   - **Test Score: 146 tests, all passing**
+- **Step 0.2 — Backend Upload Safety & Deduplication**:
+  - SHA-256 deduplication per tenant: computes SHA-256 hash of uploaded file bytes; detects identical duplicate uploads and returns HTTP 409 Conflict with informative timestamp and filename.
+  - Safe replacement (`mode="replace"` / `replace=True`): atomically deletes previous `UploadLog` and cascades deletion of previous sales, expenses, and rejected rows within the same transaction before writing the fresh import.
+  - Server-side mapping validation: `validate_confirmed_mapping()` in `services/mapping_service.py` strictly verifies standard target fields, blocks duplicate target assignments, and enforces all required fields before processing data.
+  - Content-Length & memory protection: upfront check of `Content-Length` header rejects > 10MB payloads with HTTP 413, and streaming chunk reader protects against memory exhaustion.
+  - Transparent SQLite migration: `init_db()` automatically inspects `upload_log` and adds nullable `file_hash` column and index without touching existing data.
+  - Frontend conflict resolution: modal banner displays 409 Conflict warning with options to skip or replace existing import.
+  - **Test Score: 159 tests, all passing**
 
 ---
 
