@@ -9,7 +9,13 @@ from api.deps import SessionUser, require_session
 from api.detector import detect_file_type
 from api.serializers import to_jsonable
 from config import settings
-from services.upload_service import execute_upload, read_file, suggest_mapping_from_file, validate_file
+from services.upload_service import (
+    execute_upload,
+    execute_cashbook_upload,
+    read_file,
+    suggest_mapping_from_file,
+    validate_file,
+)
 
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
@@ -61,7 +67,7 @@ async def preview_upload(
         file_bytes, filename = await _read_upload(file)
         validate_file(file_bytes, filename)
         raw_df = read_file(file_bytes, filename)
-        detected_type = detect_file_type(raw_df.columns.tolist())
+        detected_type = detect_file_type(raw_df.columns.tolist(), raw_df)
         selected_type = file_type or detected_type
         preview = suggest_mapping_from_file(file_bytes, filename, selected_type, use_llm=False)
         file_hash = hashlib.sha256(file_bytes).hexdigest()
@@ -73,6 +79,8 @@ async def preview_upload(
         "file_hash": file_hash,
         "detected_type": detected_type,
         "file_type": preview.file_type,
+        "is_cashbook": preview.is_cashbook,
+        "cashbook_summary": preview.cashbook_summary,
         "columns": preview.column_names,
         "suggested_mapping": preview.suggested.suggested,
         "mapping_methods": preview.suggested.method,
@@ -87,33 +95,45 @@ async def commit_upload(
     request: Request,
     file: UploadFile = File(...),
     file_type: str = Form(...),
-    mapping: str = Form(...),
+    mapping: str = Form(default="{}"),
     mode: str = Form(default="commit"),
     replace: bool = Form(default=False),
     user: SessionUser = Depends(require_session),
 ):
     _check_content_length(request)
-    try:
-        confirmed_mapping = json.loads(mapping)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mapping must be valid JSON.")
-    if not isinstance(confirmed_mapping, dict):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mapping must be a JSON object.")
+    if file_type == "cashbook":
+        confirmed_mapping = {}
+    else:
+        try:
+            confirmed_mapping = json.loads(mapping)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mapping must be valid JSON.")
+        if not isinstance(confirmed_mapping, dict):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mapping must be a JSON object.")
 
     try:
         file_bytes, filename = await _read_upload(file)
         file_hash = hashlib.sha256(file_bytes).hexdigest()
         # Re-read on every commit: the API keeps no upload state between requests.
         preview = suggest_mapping_from_file(file_bytes, filename, file_type, use_llm=False)
-        result = execute_upload(
-            raw_df=preview.raw_df,
-            confirmed_mapping=confirmed_mapping,
-            file_type=file_type,
-            filename=filename,
-            tenant_id=user.tenant_id,
-            file_hash=file_hash,
-            replace_existing=(mode == "replace" or replace),
-        )
+        if file_type == "cashbook":
+            result = execute_cashbook_upload(
+                raw_df=preview.raw_df,
+                filename=filename,
+                tenant_id=user.tenant_id,
+                file_hash=file_hash,
+                replace_existing=(mode == "replace" or replace),
+            )
+        else:
+            result = execute_upload(
+                raw_df=preview.raw_df,
+                confirmed_mapping=confirmed_mapping,
+                file_type=file_type,
+                filename=filename,
+                tenant_id=user.tenant_id,
+                file_hash=file_hash,
+                replace_existing=(mode == "replace" or replace),
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -133,6 +153,8 @@ async def commit_upload(
         "upload_log_id": result.upload_log_id,
         "filename": result.filename,
         "file_type": result.file_type,
+        "is_cashbook": result.is_cashbook,
+        "cashbook_summary": result.cashbook_summary,
         "rows_read": result.raw_count,
         "rows_saved": result.clean_count,
         "rows_skipped": result.invalid_removed,

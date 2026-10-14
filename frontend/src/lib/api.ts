@@ -1,12 +1,25 @@
 export type PublicUser = { username: string; business_name: string };
 export type Credentials = { username: string; password: string };
 export type RegisterInput = Credentials & { business_name: string };
-export type FileType = "sales" | "expenses";
+export type FileType = "sales" | "expenses" | "cashbook";
+
+export type CashbookSummary = {
+  sales_count: number;
+  expenses_count: number;
+  sales_total: number;
+  expenses_total: number;
+  split_column: string;
+  split_method: string;
+  message: string;
+};
 
 export type UploadPreview = {
   filename: string;
+  file_hash?: string;
   detected_type: FileType;
   file_type: FileType;
+  is_cashbook?: boolean;
+  cashbook_summary?: CashbookSummary;
   columns: string[];
   suggested_mapping: Record<string, string | null>;
   mapping_methods: Record<string, "rule" | "llm" | "unmapped">;
@@ -20,6 +33,8 @@ export type UploadResult = {
   upload_log_id: number;
   filename: string;
   file_type: FileType;
+  is_cashbook?: boolean;
+  cashbook_summary?: string;
   rows_read: number;
   rows_saved: number;
   rows_skipped: number;

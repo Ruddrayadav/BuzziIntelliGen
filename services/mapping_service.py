@@ -177,7 +177,9 @@ class ColumnMapping:
     def missing_required(self) -> list[str]:
         """Required standard fields that have no raw column mapped to them."""
         required = (
-            SALES_REQUIRED if self.file_type == "sales" else EXPENSES_REQUIRED
+            SALES_REQUIRED if self.file_type == "sales"
+            else EXPENSES_REQUIRED if self.file_type == "expenses"
+            else []
         )
         return [r for r in required if r not in self.mapped_standard]
 

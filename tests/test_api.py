@@ -258,3 +258,52 @@ def test_upload_duplicate_detection_and_replace():
         assert res3.json()["success"] is True
 
 
+def test_upload_cashbook_preview_and_commit():
+    cashbook_csv = (
+        "Date,Particulars,Debit,Credit\n"
+        "2024-01-01,Counter sale Jan 1,0,15000\n"
+        "2024-01-01,Shop rent,25000,0\n"
+        "2024-01-02,Tea and snacks,0,1200\n"
+        "2024-01-02,Electricity bill,3200,0\n"
+    ).encode("utf-8")
+
+    with TestClient(app) as client:
+        _register(client, "api_cb_user", "Cashbook Cafe")
+
+        # 1. Preview detects cashbook
+        prev = client.post(
+            "/api/upload/preview",
+            files={"file": ("cashbook.csv", cashbook_csv, "text/csv")},
+        )
+        assert prev.status_code == 200
+        prev_data = prev.json()
+        assert prev_data["detected_type"] == "cashbook"
+        assert prev_data["is_cashbook"] is True
+        assert prev_data["cashbook_summary"]["sales_count"] == 2
+        assert prev_data["cashbook_summary"]["expenses_count"] == 2
+        assert prev_data["cashbook_summary"]["sales_total"] == 16200.0
+        assert prev_data["cashbook_summary"]["expenses_total"] == 28200.0
+
+        # 2. Commit imports both sales and expenses
+        commit = client.post(
+            "/api/upload/commit",
+            files={"file": ("cashbook.csv", cashbook_csv, "text/csv")},
+            data={"file_type": "cashbook"},
+        )
+        assert commit.status_code == 200
+        commit_data = commit.json()
+        assert commit_data["success"] is True
+        assert commit_data["is_cashbook"] is True
+        assert commit_data["rows_saved"] == 4
+        assert "Split into 2 sales" in commit_data["cashbook_summary"]
+
+        # 3. Verify Dashboard shows both sides
+        dash = client.get("/api/dashboard")
+        assert dash.status_code == 200
+        dash_data = dash.json()
+        assert dash_data["total_revenue"] == 16200.0
+        assert dash_data["total_expenses"] == 28200.0
+        assert dash_data["net_profit"] == -12000.0
+
+
+

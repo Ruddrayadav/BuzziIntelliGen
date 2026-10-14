@@ -126,6 +126,13 @@
   - Transparent SQLite migration: `init_db()` automatically inspects `upload_log` and adds nullable `file_hash` column and index without touching existing data.
   - Frontend conflict resolution: modal banner displays 409 Conflict warning with options to skip or replace existing import.
   - **Test Score: 159 tests, all passing**
+- **Step 0.3 — File Detector Rewrite & Cash-Book Splitting**:
+  - Regex word boundary detector (`\b`) with underscore/hyphen normalization: prevents substring collisions (e.g. "rent" inside "current" or "parent", "cost" inside "customer").
+  - Value-based heuristics: checks category/description column contents when headers are generic (e.g. `Date, Type, Details, Amount`) to reliably separate sales from expenses.
+  - Cash-book file detection & automatic splitting: detects single files containing dual Debit/Credit columns, Inflow/Outflow type values, or signed (+/-) amounts; splits rows cleanly into Sales and Expenses without requiring double uploads.
+  - Atomic cash-book ingestion: `execute_cashbook_upload()` records separate upload logs and inserts both sets of records within a single atomic database transaction with hash deduplication and replacement support.
+  - Clean UI presentation: dedicated purple cash-book chip and split summary breakdown showing count and sum of split sales vs expenses.
+  - **Test Score: 178 tests, all passing**
 
 ---
 

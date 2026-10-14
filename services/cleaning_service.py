@@ -254,7 +254,11 @@ def clean_sales(df: pd.DataFrame) -> CleaningResult:
 
     # Step 4: Normalize text
     df["product"] = df["product"].apply(_normalize_text)
-    df["category"] = df["category"].apply(lambda v: _normalize_text(v, title_case=True))
+    if "category" in df.columns:
+        df["category"] = df["category"].apply(lambda v: _normalize_text(v, title_case=True))
+    else:
+        df["category"] = "Uncategorized"
+
     if "order_id" in df.columns:
         df["order_id"] = df["order_id"].apply(
             lambda v: str(v).strip() if pd.notna(v) and str(v).strip() else None
@@ -361,8 +365,15 @@ def clean_expenses(df: pd.DataFrame) -> CleaningResult:
     df["date"] = df["date"].apply(_parse_date)
 
     # Normalize text
-    df["category"] = df["category"].apply(lambda v: _normalize_text(v, title_case=True))
-    df["description"] = df["description"].apply(lambda v: _normalize_text(v, title_case=False))
+    if "category" in df.columns:
+        df["category"] = df["category"].apply(lambda v: _normalize_text(v, title_case=True))
+    else:
+        df["category"] = "Uncategorized"
+
+    if "description" in df.columns:
+        df["description"] = df["description"].apply(lambda v: _normalize_text(v, title_case=False))
+    else:
+        df["description"] = None
 
     # Fill missing category
     df["category"] = df["category"].fillna("Uncategorized")
