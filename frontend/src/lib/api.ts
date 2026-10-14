@@ -159,6 +159,8 @@ export const api = {
     return request<UploadResult>("/api/upload/commit", { method: "POST", body: form });
   },
   dashboard: () => request<DashboardData>("/api/dashboard"),
+  trend: (granularity: "daily" | "weekly" | "monthly" = "daily") =>
+    request<Array<{ label: string; revenue: number; date?: string }>>(`/api/dashboard/trend?granularity=${granularity}`),
   months: () => request<{ months: string[] }>("/api/analytics/months"),
   compare: (currentMonth?: string, priorMonth?: string) => request<PeriodComparison | null>(`/api/analytics/compare${monthsQuery(currentMonth, priorMonth)}`),
   anomalies: () => request<AnomalyReport>("/api/analytics/anomalies"),

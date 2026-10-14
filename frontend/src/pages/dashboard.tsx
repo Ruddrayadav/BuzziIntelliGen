@@ -41,10 +41,106 @@ export function DashboardPage() {
 }
 
 function Overview({ data, comparison, granularity, setGranularity }: { data: DashboardData; comparison: PeriodComparison | null; granularity: Granularity; setGranularity: (value: Granularity) => void }) {
-  const trendData = useMemo(() => groupTrendForDisplay(data.revenue_trend, granularity), [data.revenue_trend, granularity]);
-  return <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><KpiCard label="Revenue" value={money(data.total_revenue)} delta={comparison?.revenue_delta_pct} /><KpiCard label="Expenses" value={money(data.total_expenses)} delta={comparison?.expense_delta_pct} /><KpiCard label="Profit" value={money(data.net_profit)} delta={comparison?.profit_delta_pct} /><KpiCard label="Average order value" value={money(data.average_order_value)} delta={comparison?.aov_delta_pct} /></div>
-    <ChartCard title="Revenue over time" takeaway={data.revenue_trend.length ? "This chart shows the revenue recorded in your imported sales files." : "Import sales data to see your revenue over time."} details={trendData}><div className="mb-4 flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">{(["daily", "weekly", "monthly"] as Granularity[]).map((option) => <button key={option} onClick={() => setGranularity(option)} className={cn("rounded-lg px-3 py-1.5 text-sm font-medium capitalize", granularity === option ? "bg-surface text-ink shadow-sm" : "text-muted")}>{option}</button>)}</div><ResponsiveContainer width="100%" height={260}><LineChart data={trendData}><CartesianGrid vertical={false} strokeDasharray="3 3" /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis tickFormatter={money} tickLine={false} axisLine={false} width={76} /><Tooltip formatter={(value) => money(Number(value))} /><Line type="monotone" dataKey="revenue" name="Revenue" stroke="#2563eb" strokeWidth={3} dot={false} /></LineChart></ResponsiveContainer></ChartCard>
-    <div className="grid gap-6 lg:grid-cols-2"><ChartCard title="Top products" takeaway={data.top_products[0] ? `${data.top_products[0].product} is your highest-revenue product in the imported data.` : "Import sales data to see your top products."} details={data.top_products}><ResponsiveContainer width="100%" height={260}><BarChart data={data.top_products} layout="vertical" margin={{ left: 24 }}><XAxis type="number" tickFormatter={money} hide /><YAxis type="category" dataKey="product" width={105} tickLine={false} axisLine={false} /><Tooltip formatter={(value) => money(Number(value))} /><Bar dataKey="revenue" name="Revenue" fill="#2563eb" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer></ChartCard><ChartCard title="Where money was spent" takeaway={data.expense_breakdown[0] ? `${data.expense_breakdown[0].category} is the largest expense group in the imported data.` : "Import expense data to see where money was spent."} details={data.expense_breakdown}><ResponsiveContainer width="100%" height={260}><PieChart><Pie data={data.expense_breakdown} dataKey="amount" nameKey="category" innerRadius={58} outerRadius={92} paddingAngle={3}>{data.expense_breakdown.map((entry, index) => <Cell key={entry.category} fill={palette[index % palette.length]} />)}</Pie><Tooltip formatter={(value) => money(Number(value))} /><Legend /></PieChart></ResponsiveContainer></ChartCard></div>
+  const trendQuery = useQuery({
+    queryKey: ["dashboard", "trend", granularity],
+    queryFn: () => api.trend(granularity),
+  });
+  const trendData = trendQuery.data ?? [];
+
+  return <div className="space-y-6">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <KpiCard
+        label="Revenue"
+        periodLabel={comparison?.current.period_label}
+        currentValue={comparison ? money(comparison.current.revenue) : money(data.total_revenue)}
+        allTimeValue={money(data.total_revenue)}
+        delta={comparison?.revenue_delta_pct}
+        priorPeriodLabel={comparison?.prior.period_label}
+      />
+      <KpiCard
+        label="Expenses"
+        periodLabel={comparison?.current.period_label}
+        currentValue={comparison ? money(comparison.current.expenses) : money(data.total_expenses)}
+        allTimeValue={money(data.total_expenses)}
+        delta={comparison?.expense_delta_pct}
+        priorPeriodLabel={comparison?.prior.period_label}
+        invertDelta
+      />
+      <KpiCard
+        label="Profit"
+        periodLabel={comparison?.current.period_label}
+        currentValue={comparison ? money(comparison.current.net_profit) : money(data.net_profit)}
+        allTimeValue={money(data.net_profit)}
+        delta={comparison?.profit_delta_pct}
+        priorPeriodLabel={comparison?.prior.period_label}
+      />
+      <KpiCard
+        label="Average order value"
+        periodLabel={comparison?.current.period_label}
+        currentValue={comparison ? money(comparison.current.average_order_value) : money(data.average_order_value)}
+        allTimeValue={money(data.average_order_value)}
+        delta={comparison?.aov_delta_pct}
+        priorPeriodLabel={comparison?.prior.period_label}
+      />
+    </div>
+
+    <ChartCard
+      title="Revenue over time"
+      takeaway={data.revenue_trend.length ? "This chart shows the revenue recorded in your imported sales files, grouped by backend service." : "Import sales data to see your revenue over time."}
+      details={trendData}
+    >
+      <div className="mb-4 flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+        {(["daily", "weekly", "monthly"] as Granularity[]).map((option) => (
+          <button
+            key={option}
+            onClick={() => setGranularity(option)}
+            className={cn("rounded-lg px-3 py-1.5 text-sm font-medium capitalize", granularity === option ? "bg-surface text-ink shadow-sm" : "text-muted")}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      {trendQuery.isPending ? (
+        <div className="flex h-[260px] items-center justify-center text-muted">
+          <LoaderCircle className="animate-spin" size={20} />
+          <span className="ml-2 text-sm">Loading trend data…</span>
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={trendData}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <XAxis dataKey="label" tickLine={false} axisLine={false} />
+            <YAxis tickFormatter={money} tickLine={false} axisLine={false} width={76} />
+            <Tooltip formatter={(value) => money(Number(value))} />
+            <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#2563eb" strokeWidth={3} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </ChartCard>
+
+    <div className="grid gap-6 lg:grid-cols-2">
+      <ChartCard title="Top products" takeaway={data.top_products[0] ? `${data.top_products[0].product} is your highest-revenue product in the imported data.` : "Import sales data to see your top products."} details={data.top_products}>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={data.top_products} layout="vertical" margin={{ left: 24 }}>
+            <XAxis type="number" tickFormatter={money} hide />
+            <YAxis type="category" dataKey="product" width={105} tickLine={false} axisLine={false} />
+            <Tooltip formatter={(value) => money(Number(value))} />
+            <Bar dataKey="revenue" name="Revenue" fill="#2563eb" radius={[0, 6, 6, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartCard>
+      <ChartCard title="Where money was spent" takeaway={data.expense_breakdown[0] ? `${data.expense_breakdown[0].category} is the largest expense group in the imported data.` : "Import expense data to see where money was spent."} details={data.expense_breakdown}>
+        <ResponsiveContainer width="100%" height={260}>
+          <PieChart>
+            <Pie data={data.expense_breakdown} dataKey="amount" nameKey="category" innerRadius={58} outerRadius={92} paddingAngle={3}>
+              {data.expense_breakdown.map((entry, index) => <Cell key={entry.category} fill={palette[index % palette.length]} />)}
+            </Pie>
+            <Tooltip formatter={(value) => money(Number(value))} />
+            <Legend />
+          </PieChart>
+        </ResponsiveContainer>
+      </ChartCard>
+    </div>
   </div>;
 }
 
@@ -52,8 +148,44 @@ function Compare({ comparison, loading, error }: { comparison: PeriodComparison 
   if (loading) return <PanelLoading />;
   if (error) return <PageError error={error} />;
   if (!comparison) return <NoData text="Import at least two months of data to compare them here." />;
-  const rows = [{ label: "Revenue", current: comparison.current.revenue, prior: comparison.prior.revenue, delta: comparison.revenue_delta, percent: comparison.revenue_delta_pct }, { label: "Expenses", current: comparison.current.expenses, prior: comparison.prior.expenses, delta: comparison.expense_delta, percent: comparison.expense_delta_pct }, { label: "Profit", current: comparison.current.net_profit, prior: comparison.prior.net_profit, delta: comparison.profit_delta, percent: comparison.profit_delta_pct }, { label: "Average order value", current: comparison.current.average_order_value, prior: comparison.prior.average_order_value, delta: comparison.aov_delta, percent: comparison.aov_delta_pct }];
-  return <div className="space-y-6"><Card className="p-6"><p className="text-sm text-muted">Comparing</p><h2 className="mt-1 text-xl font-bold">{comparison.current.period_label} and {comparison.prior.period_label}</h2><div className="mt-5 overflow-x-auto"><table className="min-w-full text-left text-sm"><thead className="border-b text-muted"><tr><th className="px-2 py-3">Metric</th><th className="px-2 py-3">Current</th><th className="px-2 py-3">Earlier</th><th className="px-2 py-3">Change</th></tr></thead><tbody>{rows.map((row) => <tr key={row.label} className="border-b"><td className="px-2 py-3 font-semibold">{row.label}</td><td className="px-2 py-3">{money(row.current)}</td><td className="px-2 py-3">{money(row.prior)}</td><td className="px-2 py-3"><Delta value={row.percent} /> <span className="ml-1 text-muted">{money(row.delta)}</span></td></tr>)}</tbody></table></div><p className="mt-4 text-sm text-muted">Profit changed by {money(comparison.profit_delta)} between these two months.</p><Details rows={comparison.product_shifts} /></Card></div>;
+  const rows = [
+    { label: "Revenue", current: comparison.current.revenue, prior: comparison.prior.revenue, delta: comparison.revenue_delta, percent: comparison.revenue_delta_pct, invert: false },
+    { label: "Expenses", current: comparison.current.expenses, prior: comparison.prior.expenses, delta: comparison.expense_delta, percent: comparison.expense_delta_pct, invert: true },
+    { label: "Profit", current: comparison.current.net_profit, prior: comparison.prior.net_profit, delta: comparison.profit_delta, percent: comparison.profit_delta_pct, invert: false },
+    { label: "Average order value", current: comparison.current.average_order_value, prior: comparison.prior.average_order_value, delta: comparison.aov_delta, percent: comparison.aov_delta_pct, invert: false },
+  ];
+  return <div className="space-y-6">
+    <Card className="p-6">
+      <p className="text-sm text-muted">Comparing</p>
+      <h2 className="mt-1 text-xl font-bold">{comparison.current.period_label} and {comparison.prior.period_label}</h2>
+      <div className="mt-5 overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="border-b text-muted">
+            <tr>
+              <th className="px-2 py-3">Metric</th>
+              <th className="px-2 py-3">Current</th>
+              <th className="px-2 py-3">Earlier</th>
+              <th className="px-2 py-3">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label} className="border-b">
+                <td className="px-2 py-3 font-semibold">{row.label}</td>
+                <td className="px-2 py-3">{money(row.current)}</td>
+                <td className="px-2 py-3">{money(row.prior)}</td>
+                <td className="px-2 py-3">
+                  <Delta value={row.percent} invert={row.invert} /> <span className="ml-1 text-muted">{money(row.delta)}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-4 text-sm text-muted">Profit changed by {money(comparison.profit_delta)} between these two months.</p>
+      <Details rows={comparison.product_shifts} />
+    </Card>
+  </div>;
 }
 
 function Unusual({ report, loading, error }: { report: { total_anomalies: number; revenue_anomalies: Anomaly[]; expense_anomalies: Anomaly[] } | null; loading: boolean; error: Error | null }) {
@@ -71,8 +203,71 @@ function Diagnosis({ diagnosis, loading, error }: { diagnosis: ProfitDiagnosis |
   return <div className="space-y-6"><Card className="p-6"><p className="text-sm text-muted">Main reason profit changed</p><h2 className="mt-1 text-xl font-bold">{diagnosis.primary_driver}</h2><p className="mt-3 text-muted">Profit changed by {money(diagnosis.profit_change)} from {diagnosis.comparison_label} to {diagnosis.period_label}.</p>{diagnosis.key_insights.length > 0 && <ul className="mt-5 space-y-2 text-sm text-muted">{diagnosis.key_insights.map((insight) => <li key={insight}>• {insight}</li>)}</ul>}</Card><ChartCard title="How profit moved" takeaway={diagnosis.primary_driver} details={diagnosis.waterfall_df}><ResponsiveContainer width="100%" height={280}><BarChart data={diagnosis.waterfall_df}><CartesianGrid vertical={false} strokeDasharray="3 3" /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis tickFormatter={money} tickLine={false} axisLine={false} width={80} /><Tooltip formatter={(value) => money(Number(value))} /><Bar dataKey="value" name="Profit movement" radius={[6, 6, 0, 0]}>{diagnosis.waterfall_df.map((item) => <Cell key={item.label} fill={item.value < 0 ? "#e11d48" : "#059669"} />)}</Bar></BarChart></ResponsiveContainer></ChartCard>{diagnosis.recommendations.length > 0 && <Card className="p-6"><h3 className="font-semibold">Next steps to consider</h3><ul className="mt-4 space-y-2 text-sm leading-6 text-muted">{diagnosis.recommendations.map((item) => <li key={item}>• {item}</li>)}</ul><Details rows={diagnosis.top_expense_surges.concat(diagnosis.top_revenue_drags)} /></Card>}</div>;
 }
 
-function KpiCard({ label, value, delta }: { label: string; value: string; delta?: number }) { return <Card className="p-5"><p className="text-sm font-medium text-muted">{label}</p><p className="mt-2 text-2xl font-bold tracking-tight">{value}</p>{delta === undefined ? <p className="mt-2 text-sm text-muted">No earlier month to compare yet.</p> : <p className="mt-2"><Delta value={delta} /> <span className="ml-1 text-sm text-muted">vs earlier month</span></p>}</Card>; }
-function Delta({ value }: { value: number }) { const Icon = value > 0 ? ArrowUpRight : value < 0 ? ArrowDownRight : ArrowRight; return <span className={cn("inline-flex items-center gap-1 text-sm font-semibold", value > 0 ? "text-emerald-600" : value < 0 ? "text-rose-600" : "text-muted")}><Icon size={16} />{signedPercent(value)}</span>; }
+function KpiCard({
+  label,
+  periodLabel,
+  currentValue,
+  allTimeValue,
+  delta,
+  priorPeriodLabel,
+  invertDelta = false,
+}: {
+  label: string;
+  periodLabel?: string;
+  currentValue: string;
+  allTimeValue: string;
+  delta?: number;
+  priorPeriodLabel?: string;
+  invertDelta?: boolean;
+}) {
+  return (
+    <Card className="flex flex-col justify-between p-5">
+      <div>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium text-muted">{label}</p>
+          {periodLabel ? (
+            <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-muted dark:bg-slate-800">
+              {periodLabel}
+            </span>
+          ) : (
+            <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-muted dark:bg-slate-800">
+              All time
+            </span>
+          )}
+        </div>
+        <p className="mt-2 text-2xl font-bold tracking-tight">{currentValue}</p>
+        {delta === undefined ? (
+          <p className="mt-2 text-xs text-muted">No earlier month to compare yet.</p>
+        ) : (
+          <p className="mt-2 text-xs">
+            <Delta value={delta} invert={invertDelta} />
+            <span className="ml-1 text-muted">vs {priorPeriodLabel ?? "earlier month"}</span>
+          </p>
+        )}
+      </div>
+      <div className="mt-4 border-t pt-3 text-xs text-muted">
+        <span>All time: </span>
+        <strong className="font-semibold text-ink">{allTimeValue}</strong>
+      </div>
+    </Card>
+  );
+}
+
+function Delta({ value, invert = false }: { value: number; invert?: boolean }) {
+  const isPositive = value > 0;
+  const isNegative = value < 0;
+  const isGood = invert ? isNegative : isPositive;
+  const isBad = invert ? isPositive : isNegative;
+  const Icon = isPositive ? ArrowUpRight : isNegative ? ArrowDownRight : ArrowRight;
+  const color = isGood ? "text-emerald-600" : isBad ? "text-rose-600" : "text-muted";
+  return (
+    <span className={cn("inline-flex items-center gap-1 font-semibold", color)}>
+      <Icon size={14} />
+      {signedPercent(value)}
+    </span>
+  );
+}
+
 function Severity({ severity }: { severity: "critical" | "warning" | "info" }) { const styles = { critical: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200", warning: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200", info: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200" }; return <span className={cn("rounded-full px-3 py-1 text-xs font-bold capitalize", styles[severity])}>{severity}</span>; }
 function ChartCard({ title, takeaway, details, children }: { title: string; takeaway: string; details: Array<Record<string, unknown>> | Array<{ label: string; value: number }> | Array<{ date: string; revenue: number }>; children: React.ReactNode }) { return <Card className="p-5 sm:p-6"><h2 className="text-lg font-bold">{title}</h2><div className="mt-5">{children}</div><p className="mt-4 text-sm leading-6 text-muted">{takeaway}</p><Details rows={details as Array<Record<string, unknown>>} /></Card>; }
 function Details({ rows }: { rows: Array<Record<string, unknown>> }) { if (rows.length === 0) return null; const columns = Object.keys(rows[0]); return <details className="mt-5 rounded-xl border p-3"><summary className="cursor-pointer text-sm font-semibold">Show details</summary><div className="mt-3 overflow-x-auto"><table className="min-w-full text-left text-xs"><thead className="text-muted"><tr>{columns.map((column) => <th key={column} className="px-2 py-2">{column.replace(/_/g, " ")}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} className="border-t">{columns.map((column) => <td key={column} className="px-2 py-2">{String(row[column] ?? "—")}</td>)}</tr>)}</tbody></table></div></details>; }
@@ -82,14 +277,3 @@ function PageError({ error, retry }: { error: Error; retry?: () => void }) { con
 function EmptyDashboard() { return <Card className="mx-auto mt-7 max-w-2xl p-8 text-center"><BarChart3 className="mx-auto text-brand" size={30} /><h2 className="mt-4 text-xl font-bold">Your dashboard will appear here.</h2><p className="mt-2 text-muted">Upload a sales or expense file to start seeing your business information.</p><Button className="mt-6" asChild><a href="/upload">Upload files</a></Button></Card>; }
 function NoData({ text }: { text: string }) { return <Card className="p-8 text-center text-muted">{text}</Card>; }
 
-// Display-only grouping of the API's daily values. This belongs in the backend later.
-function groupTrendForDisplay(rows: DashboardData["revenue_trend"], granularity: Granularity) {
-  if (granularity === "daily") return rows.map((row) => ({ label: plainDate(row.date), revenue: row.revenue }));
-  const grouped = new Map<string, number>();
-  rows.forEach((row) => {
-    const date = new Date(row.date);
-    const label = granularity === "weekly" ? `Week ${Math.ceil(date.getDate() / 7)}` : new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric" }).format(date);
-    grouped.set(label, (grouped.get(label) ?? 0) + row.revenue);
-  });
-  return Array.from(grouped, ([label, revenue]) => ({ label, revenue }));
-}

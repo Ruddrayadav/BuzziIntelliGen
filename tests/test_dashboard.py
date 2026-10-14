@@ -13,7 +13,7 @@ import pandas as pd
 
 from db.database import get_db, init_db
 from db.models import Sales, Expenses, UploadLog
-from services.dashboard_service import get_dashboard_data, DashboardData
+from services.dashboard_service import get_dashboard_data, get_revenue_trend, DashboardData
 
 TENANT = "test_tenant_dash"
 
@@ -112,3 +112,29 @@ class TestDashboardService:
         assert len(data.revenue_trend) == 2
         rev_jan1 = data.revenue_trend[data.revenue_trend["date"] == date(2024, 1, 1)].iloc[0]["revenue"]
         assert rev_jan1 == 150.0
+
+    def test_revenue_trend_service_granularities(self):
+        _insert_sample_data()
+        
+        # 1. Daily trend
+        daily = get_revenue_trend(TENANT, "daily")
+        assert len(daily) == 2
+        assert daily.iloc[0]["label"] == "01 Jan 2024"
+        assert daily.iloc[0]["revenue"] == 150.0
+
+        # 2. Weekly ISO trend (2024-01-01 was Monday, ISO week 1 of 2024)
+        weekly = get_revenue_trend(TENANT, "weekly")
+        assert len(weekly) == 1
+        assert weekly.iloc[0]["label"] == "W01 2024"
+        assert weekly.iloc[0]["revenue"] == 270.0
+
+        # 3. Monthly trend
+        monthly = get_revenue_trend(TENANT, "monthly")
+        assert len(monthly) == 1
+        assert monthly.iloc[0]["label"] == "Jan 2024"
+        assert monthly.iloc[0]["revenue"] == 270.0
+
+    def test_revenue_trend_invalid_granularity(self):
+        with pytest.raises(ValueError, match="Unsupported granularity"):
+            get_revenue_trend(TENANT, "yearly")
+

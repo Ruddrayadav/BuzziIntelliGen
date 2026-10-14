@@ -32,6 +32,24 @@ const fields: Record<FileType, Array<{ value: string; label: string }>> = {
   ],
 };
 
+const requiredFields: Record<FileType, string[]> = {
+  sales: ["date", "product", "revenue"],
+  expenses: ["date", "category", "amount"],
+};
+
+function getMissingRequired(mapping: Record<string, string | null>, fileType: FileType): string[] {
+  const mappedTargets = new Set(Object.values(mapping).filter((v): v is string => Boolean(v)));
+  return requiredFields[fileType].filter((req) => !mappedTargets.has(req));
+}
+
+function getDuplicateTargets(mapping: Record<string, string | null>): string[] {
+  const counts: Record<string, number> = {};
+  for (const target of Object.values(mapping)) {
+    if (target) counts[target] = (counts[target] || 0) + 1;
+  }
+  return Object.keys(counts).filter((k) => counts[k] > 1);
+}
+
 export function UploadPage() {
   const [uploads, setUploads] = useState<UploadEntry[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -86,7 +104,12 @@ export function UploadPage() {
   }
 
   const active = uploads.some((entry) => entry.status === "checking" || entry.status === "importing");
-  const hasReady = uploads.some((entry) => entry.status === "ready");
+  const readyEntries = uploads.filter((item) => item.status === "ready");
+  const hasReady = readyEntries.length > 0;
+  const canImport = hasReady && !active && readyEntries.every((entry) => {
+    const fType = entry.selectedType || entry.preview?.file_type || "sales";
+    return getMissingRequired(entry.mapping, fType).length === 0 && getDuplicateTargets(entry.mapping).length === 0;
+  });
   const hasDone = uploads.some((entry) => entry.status === "done");
   const step = hasDone && !active && !hasReady ? 4 : active && uploads.some((entry) => entry.status === "importing") ? 3 : uploads.length ? 2 : 1;
 
@@ -113,8 +136,28 @@ export function UploadPage() {
     </button>
 
     {uploads.length > 0 && <div className="mt-8 space-y-5">
-      {uploads.map((entry) => <FileReview key={entry.id} entry={entry} onTypeChange={(fileType) => void loadPreview(entry.id, entry.file, fileType)} onMappingChange={(raw, mapped) => updateEntry(entry.id, (item) => ({ ...item, mapping: { ...item.mapping, [raw]: mapped || null } }))} onRetry={() => void loadPreview(entry.id, entry.file, entry.selectedType)} />)}
-      {hasReady && <div className="flex justify-end"><Button onClick={() => void importFiles()} disabled={active}><>{active && <LoaderCircle className="animate-spin" size={17} />} Import files</></Button></div>}
+      {uploads.map((entry) => (
+        <FileReview
+          key={entry.id}
+          entry={entry}
+          onTypeChange={(fileType) => void loadPreview(entry.id, entry.file, fileType)}
+          onMappingChange={(raw, mapped) => updateEntry(entry.id, (item) => ({ ...item, mapping: { ...item.mapping, [raw]: mapped || null } }))}
+          onRetry={() => void loadPreview(entry.id, entry.file, entry.selectedType)}
+        />
+      ))}
+      {hasReady && (
+        <div className="flex flex-col items-end gap-2">
+          <Button onClick={() => void importFiles()} disabled={!canImport}>
+            {active && <LoaderCircle className="animate-spin" size={17} />}
+            Import files
+          </Button>
+          {!canImport && !active && (
+            <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+              Map all required fields and resolve duplicates before importing.
+            </p>
+          )}
+        </div>
+      )}
     </div>}
 
     {hasDone && <div className="mt-10 space-y-5"><div><p className="eyebrow">Import complete</p><h2 className="mt-2 text-2xl font-bold">Your files are ready to use.</h2></div>{uploads.filter((entry) => entry.status === "done" && entry.result).map((entry) => <ReconciliationCard key={entry.id} result={entry.result!} />)}<Button onClick={() => navigate("/dashboard")}>Go to dashboard</Button></div>}
@@ -137,10 +180,52 @@ function FileReview({ entry, onTypeChange, onMappingChange, onRetry }: { entry: 
   if (entry.status === "error") return <Card className="border-red-200 p-5 dark:border-red-900"><div className="flex gap-3"><AlertCircle className="shrink-0 text-red-600" size={20} /><div><p className="font-semibold">We could not check {entry.file.name}</p><p className="mt-1 text-sm text-muted">{entry.error}</p><Button className="mt-4" size="sm" variant="outline" onClick={onRetry}>Try again</Button></div></div></Card>;
   if (entry.status === "done") return null;
   const preview = entry.preview!;
-  const needsAttention = preview.missing_required.length > 0 || Object.values(entry.mapping).some((value) => value === null);
-  return <Card className="p-5 sm:p-6"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div className="flex gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-brand dark:bg-blue-950"><FileSpreadsheet size={20} /></span><div><p className="font-semibold">{entry.file.name}</p><p className="mt-1 text-sm text-muted">{preview.raw_row_count} rows · {preview.columns.length} columns</p></div></div><div className="flex items-center gap-2"><TypeChip type={preview.file_type} /><label className="sr-only" htmlFor={`type-${entry.id}`}>Change file type for {entry.file.name}</label><select id={`type-${entry.id}`} value={preview.file_type} onChange={(event) => onTypeChange(event.target.value as FileType)} className="h-9 rounded-lg border bg-surface px-2 text-sm font-medium"><option value="sales">Change to Sales</option><option value="expenses">Change to Expenses</option></select></div></div>
-    <div className="mt-6 rounded-xl bg-slate-50 p-4 dark:bg-slate-900"><p className="text-sm font-semibold">What we understood</p><div className="mt-3 space-y-2 text-sm text-muted">{Object.entries(entry.mapping).filter(([, target]) => target).map(([raw, target]) => <p key={raw}>We read <strong className="font-medium text-ink">“{raw}”</strong> as <strong className="font-medium text-ink">{friendlyField(target!, preview.file_type)}</strong>.</p>)}</div></div>
-    {needsAttention && <details className="mt-4 rounded-xl border p-4"><summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold">Fix column mapping <ChevronDown size={18} /></summary>{preview.missing_required.length > 0 && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-100">Please choose columns for: {preview.missing_required.map((field) => friendlyField(field, preview.file_type)).join(", ")}.</p>}<div className="mt-4 space-y-3">{preview.columns.map((raw) => <label key={raw} className="grid gap-2 text-sm font-medium sm:grid-cols-2 sm:items-center"><span>{raw}</span><select value={entry.mapping[raw] ?? ""} onChange={(event) => onMappingChange(raw, event.target.value)} className="h-10 rounded-lg border bg-surface px-2 font-normal"><option value="">Do not use this column</option>{fields[preview.file_type].map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}</select></label>)}</div></details>}
+  const fileType = entry.selectedType || preview.file_type;
+  const missing = getMissingRequired(entry.mapping, fileType);
+  const duplicates = getDuplicateTargets(entry.mapping);
+  const hasErrors = missing.length > 0 || duplicates.length > 0;
+  const needsAttention = hasErrors || preview.columns.some((col) => entry.mapping[col] === null);
+
+  return <Card className="p-5 sm:p-6"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div className="flex gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-brand dark:bg-blue-950"><FileSpreadsheet size={20} /></span><div><p className="font-semibold">{entry.file.name}</p><p className="mt-1 text-sm text-muted">{preview.raw_row_count} rows · {preview.columns.length} columns</p></div></div><div className="flex items-center gap-2"><TypeChip type={fileType} /><label className="sr-only" htmlFor={`type-${entry.id}`}>Change file type for {entry.file.name}</label><select id={`type-${entry.id}`} value={fileType} onChange={(event) => onTypeChange(event.target.value as FileType)} className="h-9 rounded-lg border bg-surface px-2 text-sm font-medium"><option value="sales">Change to Sales</option><option value="expenses">Change to Expenses</option></select></div></div>
+    <div className="mt-6 rounded-xl bg-slate-50 p-4 dark:bg-slate-900">
+      <p className="text-sm font-semibold">What we understood</p>
+      <div className="mt-3 space-y-2 text-sm text-muted">
+        {Object.entries(entry.mapping).filter(([, target]) => target).map(([raw, target]) => (
+          <p key={raw}>We read <strong className="font-medium text-ink">“{raw}”</strong> as <strong className="font-medium text-ink">{friendlyField(target!, fileType)}</strong>.</p>
+        ))}
+      </div>
+    </div>
+    <details className="mt-4 rounded-xl border p-4" open={needsAttention ? true : undefined}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold">
+        <span>Fix column mapping {hasErrors && <span className="ml-2 text-xs font-normal text-rose-600 dark:text-rose-400">(Action required)</span>}</span>
+        <ChevronDown size={18} />
+      </summary>
+      {missing.length > 0 && (
+        <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-100">
+          Please choose columns for required field(s): {missing.map((field) => friendlyField(field, fileType)).join(", ")}.
+        </p>
+      )}
+      {duplicates.length > 0 && (
+        <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-100">
+          Multiple columns are mapped to the same field: {duplicates.map((field) => friendlyField(field, fileType)).join(", ")}. Each field can only be mapped to one column.
+        </p>
+      )}
+      <div className="mt-4 space-y-3">
+        {preview.columns.map((raw) => (
+          <label key={raw} className="grid gap-2 text-sm font-medium sm:grid-cols-2 sm:items-center">
+            <span>{raw}</span>
+            <select
+              value={entry.mapping[raw] ?? ""}
+              onChange={(event) => onMappingChange(raw, event.target.value)}
+              className={cn("h-10 rounded-lg border bg-surface px-2 font-normal", duplicates.includes(entry.mapping[raw] ?? "") ? "border-rose-500 focus:ring-rose-500" : "")}
+            >
+              <option value="">Do not use this column</option>
+              {fields[fileType].map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+            </select>
+          </label>
+        ))}
+      </div>
+    </details>
     <PreviewTable columns={preview.columns} rows={preview.sample_rows} />
   </Card>;
 }
@@ -163,9 +248,13 @@ function displayValue(value: unknown) { return value === null || value === undef
 function messageFor(reason: unknown) { return reason instanceof ApiError ? reason.message : "We could not reach the server. Please try again."; }
 
 function downloadSkippedRows(result: UploadResult) {
-  // This is display-only export formatting; cleaning and rejection decisions stay in the service layer.
+  // Neutralise Excel/CSV formula injection: prefix with single quote if it starts with =, +, -, @
+  const escape = (value: unknown) => {
+    let s = String(value ?? "");
+    if (/^[=+\-@]/.test(s)) s = `'${s}`;
+    return `"${s.replace(/"/g, '""')}"`;
+  };
   const columns = ["row_number", "reason", ...Object.keys(result.skipped_rows[0]?.original_row ?? {})];
-  const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, "\"\"")}"`;
   const csv = [columns.join(","), ...result.skipped_rows.map((row) => [row.original_index + 1, row.reason, ...columns.slice(2).map((column) => row.original_row[column])].map(escape).join(","))].join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
@@ -174,3 +263,4 @@ function downloadSkippedRows(result: UploadResult) {
   link.click();
   URL.revokeObjectURL(url);
 }
+

@@ -29,7 +29,9 @@
 - `services/cleaning_service.py` — full pipeline: _parse_money, _parse_date, _normalize_text, clean_sales, clean_expenses, clean_dataframe
 - `tests/test_cleaning.py` — 48 tests, all passing in 0.63s
 - CleaningResult dataclass carries clean_df + report back to caller
-- Deduplication on (date, product, revenue) for sales; (date, category, amount) for expenses
+- Row-level deduplication intentionally removed (identical sales/expenses on the same day are valid retail transactions)
+- Invalid row rejection tracking with audit trail in `rejected_rows` table
+
 
 ---
 
@@ -105,25 +107,35 @@
 - `tests/test_analytics.py` — 9 new unit tests covering period comparison, anomaly detection (spikes & drops), and profit diagnosis.
 - **Current Test Score: 140 tests, all passing in 1.10s**
 
+### Phase 0 — Fix Known Bugs (2026-10-14)
+- **Step 0.0 — Test DB Isolation & Safety**:
+  - `tests/conftest.py` — intercepts database initialization; directs all pytest runs to an isolated temporary SQLite database so developer's live `data/biz_intelligence.db` is never modified or wiped by test suites.
+  - Removed `scratch/` from git tracking and updated `.gitignore` with `*.db` patterns.
+- **Step 0.1 — Frontend & API Bug Fixes**:
+  - Backend trend granularity endpoint (`/api/dashboard/trend?granularity=daily|weekly|monthly`) in `services/dashboard_service.py` and `api/routes/dashboard.py`. Groups by real ISO calendar weeks (`W01 2024`) and months, moving grouping logic out of frontend (Principle 5).
+  - Frontend KPI cards: clearly separates latest reporting month figures from all-time totals with explicit labels so owners are never misled.
+  - Expense delta inversion: expense surges are styled red/unfavorable, and expense reductions are green/favorable.
+  - Dynamic upload mapping validation: recomputes missing required fields as owner maps columns, warns on duplicate target fields, and disables "Import files" until mapping is clean.
+  - Excel/CSV formula injection protection: neutralizes cells starting with `=`, `+`, `-`, or `@` by prefixing an apostrophe on CSV download.
+  - **Test Score: 146 tests, all passing**
+
 ---
 
 ## 🏆 Project Achievements
 The "AI-Powered Business Intelligence & Decision Support System for Small Businesses" now features enterprise-grade analytical intelligence:
 1. Multi-tenant secure login and tenant isolation.
 2. Excel/CSV upload with rule-based and AI-assisted column mapping & audit trail.
-3. Automated data cleaning and deduplication.
-4. Interactive KPI Dashboard with Plotly charts and 4 executive analytical tabs.
+3. Automated data cleaning and rejected row auditing.
+4. Interactive KPI Dashboard with ISO week & monthly trends, period comparisons, and waterfall profit diagnostics.
 5. Period-over-Period (MoM) comparison with product gainers & decliners.
 6. Statistical Anomaly Detection with rolling baselines.
 7. Root Cause Profit Drop & Margin Diagnostics with waterfall attribution.
 8. Hallucination-free Natural Language Q&A with intent routing.
 
-| Phase 1 | Foundation, DB models, Cleaning & Upload Services, Multi-tenancy |
-| Phase 2 | Dashboard KPIs and trend charts (SQL only, no AI) |
-| Phase 3 | Natural Language AI Service + Q&A intent router |
-| Phase 4 | Authentication, Multi-user tenant isolation, SHA-256 security |
-| Phase 5 | Period comparison · Anomaly detection · Profit drop diagnostics |
-| Phase 6 | FastAPI wrapper · Executive PDF reports · Docker deployment |
+| Phase 0 | Bug fixes: Chart grouping, KPI clarity, upload validation, auth hardening |
+| Phase 1 | Immediate analytical wins: category breakdowns, unit volume, Ask AI v2 |
+| Phase 2 | Decision support: Attention items, day-of-week intelligence, revenue targets |
+| Phase 3 | Trust & output: Upload audit rollback, executive PDF reports, chat history |
 
 ---
 
@@ -134,10 +146,10 @@ The "AI-Powered Business Intelligence & Decision Support System for Small Busine
 | SQLite now, PostgreSQL later | SQLite needs zero setup; SQLAlchemy abstracts the difference so switching is one config line |
 | `gemma3:4b` as starting model | Locally available; `qwen3:4b` available as alternative; swap via `LLM_MODEL` in config |
 | Pydantic BaseSettings for config | Settings are validated at startup; can be overridden by env vars for deployment |
-| Service layer separate from UI | Streamlit UI can be replaced by FastAPI + React without rewriting any logic |
+| Service layer separate from UI | Streamlit UI and React UI consume the exact same Python service layer |
 | LLM never calculates numbers | Prevents hallucinated numbers; all arithmetic is Python/SQL, LLM only explains |
 | Relative dates resolved by code | "Last month" computed from latest date in user's data, not guessed by LLM |
-| sqlglot for SQL validation | Safely parse and whitelist SELECT-only queries before running fallback SQL |
+| Isolated temp DB for pytest | Prevents test suites from altering or deleting rows in developer database |
 
 ---
 
@@ -146,4 +158,5 @@ The "AI-Powered Business Intelligence & Decision Support System for Small Busine
 - Python: 3.11
 - Ollama models: gemma3:4b (active), qwen3:4b (available)
 - DB: SQLite (dev) → PostgreSQL (production)
-- UI: Streamlit → FastAPI + React (future)
+- UI: React + TypeScript + Tailwind (FastAPI backend); Streamlit as fallback
+

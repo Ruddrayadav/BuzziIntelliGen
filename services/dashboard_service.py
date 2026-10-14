@@ -107,3 +107,59 @@ def get_dashboard_data(tenant_id: str) -> DashboardData:
         top_products=top_products,
         expense_breakdown=expense_breakdown,
     )
+
+
+def get_revenue_trend(tenant_id: str, granularity: str = "daily") -> pd.DataFrame:
+    """
+    Fetch revenue series grouped by daily, weekly (ISO week), or monthly intervals.
+    All calculations are done in Python/Pandas backend; frontend only displays the output.
+    """
+    norm_granularity = granularity.lower().strip()
+    if norm_granularity not in ("daily", "weekly", "monthly"):
+        raise ValueError(f"Unsupported granularity: {granularity}. Choose 'daily', 'weekly', or 'monthly'.")
+
+    with get_db() as db:
+        sales_query = db.query(Sales.date, Sales.revenue).filter(Sales.tenant_id == tenant_id).statement
+        sales_df = pd.read_sql(sales_query, db.bind)
+
+    if sales_df.empty:
+        return pd.DataFrame(columns=["date", "label", "revenue"])
+
+    sales_df["dt"] = pd.to_datetime(sales_df["date"])
+
+    if norm_granularity == "daily":
+        daily = (
+            sales_df.groupby("date", as_index=False)["revenue"]
+            .sum()
+        )
+        daily["dt"] = pd.to_datetime(daily["date"])
+        daily = daily.sort_values("dt").reset_index(drop=True)
+        daily["label"] = daily["dt"].dt.strftime("%d %b %Y")
+        daily["date"] = daily["dt"].dt.strftime("%Y-%m-%d")
+        return daily[["date", "label", "revenue"]]
+
+    elif norm_granularity == "weekly":
+        sales_df["iso_year"] = sales_df["dt"].dt.isocalendar().year
+        sales_df["iso_week"] = sales_df["dt"].dt.isocalendar().week
+        weekly = (
+            sales_df.groupby(["iso_year", "iso_week"], as_index=False)
+            .agg(revenue=("revenue", "sum"), min_date=("dt", "min"))
+            .sort_values(["iso_year", "iso_week"])
+            .reset_index(drop=True)
+        )
+        weekly["label"] = weekly.apply(lambda r: f"W{int(r['iso_week']):02d} {int(r['iso_year'])}", axis=1)
+        weekly["date"] = weekly["min_date"].dt.strftime("%Y-%m-%d")
+        return weekly[["date", "label", "revenue"]]
+
+    else:  # monthly
+        sales_df["period"] = sales_df["dt"].dt.to_period("M")
+        monthly = (
+            sales_df.groupby("period", as_index=False)
+            .agg(revenue=("revenue", "sum"), min_date=("dt", "min"))
+            .sort_values("period")
+            .reset_index(drop=True)
+        )
+        monthly["label"] = monthly["min_date"].dt.strftime("%b %Y")
+        monthly["date"] = monthly["min_date"].dt.strftime("%Y-%m-%d")
+        return monthly[["date", "label", "revenue"]]
+

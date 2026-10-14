@@ -123,3 +123,40 @@ def test_user_a_data_is_not_readable_by_user_b_even_with_tenant_query_parameter(
         assert owner_a_dashboard.json()["total_revenue"] > 0
         assert intruder_dashboard.status_code == 200
         assert intruder_dashboard.json()["total_revenue"] == 0.0
+
+
+def test_dashboard_trend_endpoint():
+    sales_file = _sample_sales_file()
+    with TestClient(app) as client:
+        _register(client, "api_auth_user", "Trend Cafe")
+        client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={
+                "file_type": "sales",
+                "mapping": json.dumps({
+                    "order_id": "order_id",
+                    "date": "date",
+                    "item_name": "product",
+                    "category": "category",
+                    "qty": "quantity",
+                    "unit_price": "unit_price",
+                    "total": "revenue",
+                }),
+            },
+        )
+
+        # 1. Weekly trend request
+        weekly_res = client.get("/api/dashboard/trend?granularity=weekly")
+        assert weekly_res.status_code == 200
+        data = weekly_res.json()
+        assert isinstance(data, list)
+        assert len(data) > 0
+        assert "label" in data[0]
+        assert "W" in data[0]["label"]
+        assert "revenue" in data[0]
+
+        # 2. Invalid granularity
+        invalid_res = client.get("/api/dashboard/trend?granularity=hourly")
+        assert invalid_res.status_code == 422
+

@@ -14,6 +14,12 @@ env/
 data/biz_intelligence.db
 data/biz_intelligence.db-shm
 data/biz_intelligence.db-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Scratch files (diagnostics / one-off scripts)
+scratch/
 
 # Uploaded files (user data, never commit)
 data/uploads/
