@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,9 +10,18 @@ from fastapi.testclient import TestClient
 from api.main import app
 from db.database import get_db, init_db
 from db.models import Expenses, RejectedRow, Sales, UploadLog, User
+from llm.llm import LLMError
 
 
-API_USERS = ("api_user_a", "api_user_b", "api_auth_user")
+API_USERS = (
+    "api_user_a",
+    "api_user_b",
+    "api_auth_user",
+    "api_cb_user",
+    "api_dupe_user",
+    "api_analytics_user",
+    "api_ask_user",
+)
 SAMPLES_DIR = Path(__file__).parent.parent / "data" / "samples"
 
 
@@ -304,6 +314,81 @@ def test_upload_cashbook_preview_and_commit():
         assert dash_data["total_revenue"] == 16200.0
         assert dash_data["total_expenses"] == 28200.0
         assert dash_data["net_profit"] == -12000.0
+
+
+def test_analytics_month_validation_422():
+    with TestClient(app) as client:
+        _register(client, "api_analytics_user", "Analytics Cafe")
+
+        # 1. Invalid regex on compare current_month
+        res1 = client.get("/api/analytics/compare?current_month=invalid")
+        assert res1.status_code == 422
+
+        # 2. Out-of-bounds month (month 13)
+        res2 = client.get("/api/analytics/compare?current_month=2024-13")
+        assert res2.status_code == 422
+
+        # 3. Non-padded month
+        res3 = client.get("/api/analytics/compare?prior_month=2024-5")
+        assert res3.status_code == 422
+
+        # 4. Invalid on diagnosis
+        res4 = client.get("/api/analytics/diagnosis?current_month=2024-99")
+        assert res4.status_code == 422
+
+
+def test_analytics_compare_incomplete_month_400():
+    sales_file = _sample_sales_file()
+    valid_mapping = {
+        "order_id": "order_id",
+        "date": "date",
+        "item_name": "product",
+        "category": "category",
+        "qty": "quantity",
+        "unit_price": "unit_price",
+        "total": "revenue",
+    }
+    with TestClient(app) as client:
+        _register(client, "api_analytics_user", "Analytics Cafe")
+
+        # Upload sales data only (no expenses)
+        res = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(valid_mapping)},
+        )
+        assert res.status_code == 200
+
+        # Attempt compare
+        compare_res = client.get("/api/analytics/compare")
+        assert compare_res.status_code == 400
+        message = compare_res.json()["message"]
+        assert "only has sales" in message or "Comparison requires both sales and expenses" in message
+
+
+def test_ask_ai_endpoint_success_and_offline_503():
+    with TestClient(app) as client:
+        _register(client, "api_ask_user", "AI Ask Cafe")
+
+        # 1. Ollama online: returns 200 with answer
+        with patch("services.ai_service.call_llm_json") as mock_json, \
+             patch("services.ai_service.call_llm") as mock_text:
+            mock_json.return_value = {"intent": "net_profit"}
+            mock_text.return_value = "Your net profit is 0."
+
+            res = client.post("/api/ask", json={"question": "What is my profit?"})
+            assert res.status_code == 200
+            data = res.json()
+            assert data["intent"] == "net_profit"
+            assert data["text"] == "Your net profit is 0."
+
+        # 2. Ollama offline: returns 503 Service Unavailable with friendly message
+        with patch("services.ai_service.call_llm_json") as mock_json:
+            mock_json.side_effect = LLMError("Could not reach Ollama")
+
+            res_offline = client.post("/api/ask", json={"question": "What is my profit?"})
+            assert res_offline.status_code == 503
+            assert "The AI is not available right now" in res_offline.json()["message"]
 
 
 

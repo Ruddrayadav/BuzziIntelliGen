@@ -76,8 +76,8 @@ def _identify_intent(question: str) -> dict:
         
     except LLMError as e:
         logger.error(f"Intent classification failed: {e}")
-        # Graceful degradation: if LLM fails, we just don't know the intent
-        return {"intent": "unknown", "limit": 5}
+        # Distinct intent when LLM / Ollama is unavailable
+        return {"intent": "ai_unavailable", "limit": 5}
 
 
 # ── 2. The Data Fetchers (SQL/Pandas) ────────────────────────────────────────
@@ -120,7 +120,10 @@ def _get_net_profit(tenant_id: str) -> pd.DataFrame:
 
 def _get_period_comparison(tenant_id: str) -> pd.DataFrame:
     from services.analytics_service import compare_periods
-    comp = compare_periods(tenant_id)
+    try:
+        comp = compare_periods(tenant_id)
+    except ValueError as exc:
+        return pd.DataFrame([{"Message": str(exc)}])
     if not comp or comp.prior.period_label == "None":
         return pd.DataFrame([{"Message": "Need at least two months of data for period comparison."}])
     
@@ -156,7 +159,10 @@ def _get_anomaly_summary(tenant_id: str) -> pd.DataFrame:
 
 def _get_profit_diagnosis(tenant_id: str) -> pd.DataFrame:
     from services.analytics_service import diagnose_profit_drop
-    diag = diagnose_profit_drop(tenant_id)
+    try:
+        diag = diagnose_profit_drop(tenant_id)
+    except ValueError as exc:
+        return pd.DataFrame([{"Message": str(exc)}])
     if not diag:
         return pd.DataFrame([{"Message": "Need at least two months of data to diagnose profit shifts."}])
     
@@ -206,7 +212,7 @@ def _explain_data(question: str, df: pd.DataFrame) -> str:
     try:
         return call_llm(prompt=prompt, system_prompt=system_prompt)
     except LLMError:
-        return "I found the data, but my language processor is temporarily down. Please see the table below."
+        return "The AI language processor is temporarily unavailable, but here is the verified data from your records below."
 
 
 # ── 4. Main Public Function ──────────────────────────────────────────────────
@@ -220,6 +226,14 @@ def ask_question(question: str, tenant_id: str) -> Answer:
     intent = intent_data.get("intent", "unknown")
     limit = intent_data.get("limit", 5)
     
+    # Check if local AI service is down
+    if intent == "ai_unavailable":
+        return Answer(
+            text="The AI is not available right now. Please ensure Ollama is running (`ollama serve`) and try again.",
+            data=None,
+            intent="ai_unavailable"
+        )
+
     df = None
     
     # 2. Execute SQL/Analytics based on intent

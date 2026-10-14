@@ -133,6 +133,14 @@
   - Atomic cash-book ingestion: `execute_cashbook_upload()` records separate upload logs and inserts both sets of records within a single atomic database transaction with hash deduplication and replacement support.
   - Clean UI presentation: dedicated purple cash-book chip and split summary breakdown showing count and sum of split sales vs expenses.
   - **Test Score: 178 tests, all passing**
+- **Step 0.4 — Ask AI Reliability & Analytics Guardrails**:
+  - Distinct offline AI handling: when Ollama/LLM is unreachable, returns a clear `"The AI is not available right now"` state and HTTP 503 instead of the misleading `"I don't know how to answer that yet"`.
+  - Graceful explanation degradation: if the AI language processor goes offline after data is computed, the verified SQL data table is returned directly with a plain note.
+  - Strict month parameter validation: enforces `YYYY-MM` format via regex `^\d{4}-(0[1-9]|1[0-2])$` in `api/routes/analytics.py` (returning HTTP 422 for malformed or out-of-range dates like `2024-13` or `2024-5`).
+  - Strict period comparison guardrails: `compare_periods` and `diagnose_profit_drop` require months that have BOTH sales and expense data. If a month has only sales or only expenses, returns HTTP 400 Bad Request with a clear, plain-language message (e.g. `"Month '2024-01' only has sales data (no expenses recorded). Comparison requires both sales and expenses."`) rather than generating distorted zero-cost comparisons.
+  - Auto-selection of complete months: when comparing periods without explicit months, defaults only to periods that have both sales and expenses.
+  - Frontend error clarity: `ApiError` captures FastAPI `detail` messages for friendly red alert banner display in Ask AI and Dashboard tabs.
+  - **Test Score: 188 tests, all passing**
 
 ---
 

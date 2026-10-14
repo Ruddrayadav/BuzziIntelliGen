@@ -151,7 +151,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       : "The server returned an invalid response. Please try again.";
     throw new ApiError(message, response.status);
   }
-  if (!response.ok) throw new ApiError(body.message ?? "We could not complete that request.", response.status);
+  if (!response.ok) {
+    const detailMsg = typeof body?.detail === "string" ? body.detail : body?.detail?.message;
+    const msg = detailMsg ?? body?.message ?? "We could not complete that request.";
+    throw new ApiError(msg, response.status);
+  }
   return body as T;
 }
 

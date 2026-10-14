@@ -22,6 +22,9 @@ from sqlalchemy import func
 
 from db.database import get_db
 from db.models import Sales, Expenses
+import re
+
+MONTH_REGEX = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,21 +126,44 @@ def _calc_pct_change(current: float, prior: float) -> float:
     return round(((current - prior) / abs(prior)) * 100.0, 2)
 
 
+def get_month_data_availability(tenant_id: str) -> Dict[str, Dict[str, bool]]:
+    """
+    Returns a dictionary of month ('YYYY-MM') -> {"has_sales": bool, "has_expenses": bool, "has_both": bool}
+    for all months present in the tenant's data.
+    """
+    with get_db() as db:
+        sales_dates = db.query(Sales.date).filter(Sales.tenant_id == tenant_id).all()
+        exp_dates = db.query(Expenses.date).filter(Expenses.tenant_id == tenant_id).all()
+
+    sales_months = {d[0].strftime("%Y-%m") for d in sales_dates if d[0]}
+    exp_months = {d[0].strftime("%Y-%m") for d in exp_dates if d[0]}
+    all_months = sorted(list(sales_months.union(exp_months)))
+
+    return {
+        m: {
+            "has_sales": m in sales_months,
+            "has_expenses": m in exp_months,
+            "has_both": (m in sales_months and m in exp_months),
+        }
+        for m in all_months
+    }
+
+
+def get_complete_months(tenant_id: str) -> List[str]:
+    """
+    Returns sorted list of available months that have BOTH sales and expenses data.
+    """
+    avail = get_month_data_availability(tenant_id)
+    return [m for m, s in avail.items() if s["has_both"]]
+
+
 def get_available_months(tenant_id: str) -> List[str]:
     """
     Returns sorted list of available months in 'YYYY-MM' format for a tenant,
     combining both Sales and Expenses data.
     """
-    with get_db() as db:
-        sales_dates = db.query(Sales.date).filter(Sales.tenant_id == tenant_id).all()
-        exp_dates = db.query(Expenses.date).filter(Expenses.tenant_id == tenant_id).all()
-        
-    all_dates = [r[0] for r in sales_dates if r[0]] + [r[0] for r in exp_dates if r[0]]
-    if not all_dates:
-        return []
-    
-    unique_months = set(d.strftime("%Y-%m") for d in all_dates)
-    return sorted(list(unique_months))
+    avail = get_month_data_availability(tenant_id)
+    return list(avail.keys())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,22 +177,82 @@ def compare_periods(
 ) -> Optional[PeriodComparison]:
     """
     Compare business performance between two months (e.g. '2024-06' vs '2024-05').
-    If months are not specified, defaults to the two most recent available months.
+    If months are not specified, defaults to the two most recent complete months.
+    Guarantees that both periods have BOTH sales and expense data, or raises ValueError
+    clearly stating which month has only sales or only expenses.
     """
-    available_months = get_available_months(tenant_id)
-    if not available_months:
-        return None
-    
-    if len(available_months) < 2 and (not current_month or not prior_month):
-        # Only one month available: return comparison against zero baseline
-        current_month = available_months[0]
-        prior_month = None
+    # 1. Format validation
+    if current_month is not None and not MONTH_REGEX.match(current_month):
+        raise ValueError(f"Invalid month format: '{current_month}'. Must be YYYY-MM (e.g., '2024-05').")
+    if prior_month is not None and not MONTH_REGEX.match(prior_month):
+        raise ValueError(f"Invalid month format: '{prior_month}'. Must be YYYY-MM (e.g., '2024-04').")
 
-    if not current_month:
-        current_month = available_months[-1]
-    if prior_month is None and len(available_months) >= 2:
-        curr_idx = available_months.index(current_month) if current_month in available_months else len(available_months) - 1
-        prior_month = available_months[curr_idx - 1] if curr_idx > 0 else None
+    avail = get_month_data_availability(tenant_id)
+    if not avail:
+        return None
+
+    # Helper for clear plain-English explanation
+    def _check_both_or_raise(m: str, label: str):
+        if m not in avail:
+            raise ValueError(f"No financial records found for {label} month '{m}'.")
+        status = avail[m]
+        if not status["has_both"]:
+            if status["has_sales"] and not status["has_expenses"]:
+                raise ValueError(
+                    f"Month '{m}' only has sales data (no expenses recorded). "
+                    "Comparison requires both sales and expenses."
+                )
+            else:
+                raise ValueError(
+                    f"Month '{m}' only has expense data (no sales recorded). "
+                    "Comparison requires both sales and expenses."
+                )
+
+    # 2. If explicit months were provided, strictly validate both
+    if current_month is not None:
+        _check_both_or_raise(current_month, "current")
+
+    if prior_month is not None:
+        _check_both_or_raise(prior_month, "prior")
+
+    # 3. Auto-select complete months if not fully provided
+    complete_months = get_complete_months(tenant_id)
+
+    if not complete_months:
+        sales_only = [m for m, s in avail.items() if s["has_sales"] and not s["has_expenses"]]
+        exp_only = [m for m, s in avail.items() if s["has_expenses"] and not s["has_sales"]]
+        if sales_only and not exp_only:
+            raise ValueError(
+                f"Cannot compare periods: imported data for {', '.join(sales_only)} only has sales (no expenses recorded). "
+                "Comparison requires both sales and expenses."
+            )
+        elif exp_only and not sales_only:
+            raise ValueError(
+                f"Cannot compare periods: imported data for {', '.join(exp_only)} only has expenses (no sales recorded). "
+                "Comparison requires both sales and expenses."
+            )
+        else:
+            details = []
+            for m in sorted(avail.keys()):
+                s = avail[m]
+                if s["has_sales"] and not s["has_expenses"]:
+                    details.append(f"{m} has only sales")
+                elif s["has_expenses"] and not s["has_sales"]:
+                    details.append(f"{m} has only expenses")
+            raise ValueError(
+                f"Cannot compare periods: data is incomplete ({', '.join(details)}). "
+                "Comparison requires both sales and expenses."
+            )
+
+    if current_month is None:
+        current_month = complete_months[-1]
+
+    if prior_month is None:
+        if len(complete_months) >= 2:
+            curr_idx = complete_months.index(current_month) if current_month in complete_months else len(complete_months) - 1
+            prior_month = complete_months[curr_idx - 1] if curr_idx > 0 else None
+        else:
+            prior_month = None
 
     # Load tenant sales & expenses
     with get_db() as db:
@@ -500,6 +586,11 @@ def diagnose_profit_drop(
     Deconstructs why net profit changed between two periods into its
     root causal drivers (Revenue contraction vs Cost inflation vs Product mix).
     """
+    if current_month is not None and not MONTH_REGEX.match(current_month):
+        raise ValueError(f"Invalid month format: '{current_month}'. Must be YYYY-MM (e.g., '2024-05').")
+    if prior_month is not None and not MONTH_REGEX.match(prior_month):
+        raise ValueError(f"Invalid month format: '{prior_month}'. Must be YYYY-MM (e.g., '2024-04').")
+
     comp = compare_periods(tenant_id, current_month, prior_month)
     if not comp or comp.prior.period_label == "None":
         return None

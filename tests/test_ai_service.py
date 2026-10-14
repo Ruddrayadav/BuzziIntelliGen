@@ -12,6 +12,7 @@ import pandas as pd
 
 from db.database import get_db, init_db
 from db.models import Sales, Expenses, UploadLog
+from llm.llm import LLMError
 from services.ai_service import ask_question, Answer, _identify_intent
 
 TENANT = "test_tenant_ai"
@@ -130,4 +131,27 @@ class TestAIService:
         assert answer.intent == "profit_diagnosis"
         assert answer.text == "Profit changed due to stable margins."
         assert answer.data is not None
+
+    @patch("services.ai_service.call_llm_json")
+    def test_ask_question_ollama_offline_returns_distinct_state(self, mock_llm_json):
+        mock_llm_json.side_effect = LLMError("Could not reach the AI model")
+
+        answer = ask_question("What are my top products?", TENANT)
+
+        assert answer.intent == "ai_unavailable"
+        assert answer.data is None
+        assert "The AI is not available right now" in answer.text
+        assert "I don't know how to answer that yet" not in answer.text
+
+    @patch("services.ai_service.call_llm")
+    @patch("services.ai_service.call_llm_json")
+    def test_ask_question_llm_offline_during_explanation(self, mock_llm_json, mock_llm):
+        mock_llm_json.return_value = {"intent": "net_profit"}
+        mock_llm.side_effect = LLMError("Connection lost")
+
+        answer = ask_question("What is my profit?", TENANT)
+
+        assert answer.intent == "net_profit"
+        assert answer.data is not None
+        assert "temporarily unavailable" in answer.text
 

@@ -1,6 +1,6 @@
 """Ask-AI route backed solely by the existing AI service."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.deps import SessionUser, require_session
 from api.schemas import AskRequest
@@ -14,6 +14,11 @@ router = APIRouter(prefix="/api", tags=["ask ai"])
 @router.post("/ask")
 def ask(payload: AskRequest, user: SessionUser = Depends(require_session)):
     answer = ask_question(payload.question, user.tenant_id)
+    if answer.intent == "ai_unavailable":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=answer.text,
+        )
     return to_jsonable({
         "text": answer.text,
         "intent": answer.intent,
