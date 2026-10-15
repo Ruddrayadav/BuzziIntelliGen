@@ -221,6 +221,20 @@ export type AskAnswer = {
   table: { columns: string[]; rows: Array<Record<string, unknown>> };
 };
 
+export type ChatMessageItem = {
+  id: number;
+  question: string;
+  answer_text: string;
+  intent?: string;
+  metric?: string;
+  period?: string;
+  period_label?: string;
+  headline?: string;
+  table?: { columns: string[]; rows: Array<Record<string, unknown>> } | null;
+  created_at: string | null;
+};
+
+
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -354,7 +368,13 @@ export const api = {
     window.URL.revokeObjectURL(downloadUrl);
   },
   ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
+  chatHistory: () => request<ChatMessageItem[]>("/api/ask/history"),
+  clearChatHistory: () =>
+    request<{ success: boolean; deleted_count: number }>("/api/ask/history", {
+      method: "DELETE",
+    }),
 };
+
 
 
 function monthsQuery(currentMonth?: string, priorMonth?: string) {

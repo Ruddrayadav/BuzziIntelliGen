@@ -301,3 +301,35 @@ class RevenueTarget(Base):
     def __repr__(self) -> str:
         return f"<RevenueTarget tenant={self.tenant_id} month={self.month} target={self.target_amount}>"
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat Messages (Step 3.3)
+# ─────────────────────────────────────────────────────────────────────────────
+class ChatMessage(Base):
+    """
+    Stores natural language Q&A history per tenant for Ask AI.
+    Strictly isolated by tenant_id.
+    """
+
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
+    question = Column(Text, nullable=False)
+    answer_text = Column(Text, nullable=False)
+    intent = Column(String(50), nullable=True)
+    metric = Column(String(50), nullable=True)
+    period = Column(String(50), nullable=True)
+    period_label = Column(String(100), nullable=True)
+    headline = Column(Text, nullable=True)
+    table_data = Column(Text, nullable=True)  # JSON-encoded table rows/columns
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_chat_messages_tenant_created", "tenant_id", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ChatMessage id={self.id} tenant={self.tenant_id} q={self.question[:30]!r}>"
+
+

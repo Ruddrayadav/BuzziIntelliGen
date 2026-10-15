@@ -694,6 +694,68 @@ def test_monthly_pdf_report_api_endpoint():
         assert pdf_latest.content.startswith(b"%PDF-")
 
 
+def test_ask_ai_history_and_clear_endpoints():
+    # 1. Unauthenticated request returns 401
+    with TestClient(app) as unauth:
+        assert unauth.get("/api/ask/history").status_code == 401
+        assert unauth.delete("/api/ask/history").status_code == 401
+
+    # 2. User A operations
+    with TestClient(app) as client_a:
+        _register(client_a, "api_chat_user_a", "Chat Cafe A")
+
+        # Initial history is empty
+        res_init = client_a.get("/api/ask/history")
+        assert res_init.status_code == 200
+        assert res_init.json() == []
+
+        # Ask question with mocked LLM
+        with patch("services.ai_service.call_llm_json") as mock_json, \
+             patch("services.ai_service.call_llm") as mock_text:
+            mock_json.return_value = {"intent": "net_profit"}
+            mock_text.return_value = "Your net profit is 0."
+
+            ask_res = client_a.post("/api/ask", json={"question": "What is my profit?"})
+            assert ask_res.status_code == 200
+
+        # History now has 1 message
+        hist_res = client_a.get("/api/ask/history")
+        assert hist_res.status_code == 200
+        items = hist_res.json()
+        assert len(items) == 1
+        assert items[0]["question"] == "What is my profit?"
+        assert items[0]["intent"] == "net_profit"
+        assert "Your net profit is 0." in items[0]["answer_text"]
+
+        # 3. User B Tenant Isolation
+        with TestClient(app) as client_b:
+            _register(client_b, "api_chat_user_b", "Chat Cafe B")
+
+            # User B history is empty
+            b_hist = client_b.get("/api/ask/history")
+            assert b_hist.status_code == 200
+            assert b_hist.json() == []
+
+            # User B clearing history does not delete User A's history
+            b_clear = client_b.delete("/api/ask/history")
+            assert b_clear.status_code == 200
+            assert b_clear.json()["deleted_count"] == 0
+
+        # User A still has their message
+        a_still = client_a.get("/api/ask/history")
+        assert len(a_still.json()) == 1
+
+        # 4. User A clears history
+        a_clear = client_a.delete("/api/ask/history")
+        assert a_clear.status_code == 200
+        assert a_clear.json()["success"] is True
+        assert a_clear.json()["deleted_count"] == 1
+
+        # History is now empty
+        assert client_a.get("/api/ask/history").json() == []
+
+
+
 
 
 

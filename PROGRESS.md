@@ -227,6 +227,24 @@
     - Added `api.downloadMonthlyPdf()` method in `frontend/src/lib/api.ts` with error handling and automatic blob download.
     - Integrated "Export Report (PDF)" button in the main Dashboard header next to date filters with loading spinner and error alerts.
   - **Test Score: 230 tests, all passing in <5s**
+- **Step 3.3 — Saved Ask AI History & Conversation Management**:
+  - Database Model (`db/models.py`):
+    - Added `ChatMessage` model storing question, verified answer text, intent, metric, period, headline, JSON-encoded table data, and creation timestamp with `(tenant_id, created_at)` index.
+    - Transparently migrated via `init_db()`.
+  - Service Layer (`services/ai_service.py`):
+    - `_persist_chat_message()`: automatically persists every answered question with its source table into `ChatMessage` per tenant.
+    - `get_chat_history()`: retrieves past Q&A in reverse-chronological order with parsed data tables.
+    - `clear_chat_history()`: deletes chat records for the tenant, returning the count of deleted items.
+  - API Routes (`api/routes/ask.py`):
+    - `GET /api/ask/history`: returns past chat conversations for the authenticated tenant.
+    - `DELETE /api/ask/history`: clears chat history for the tenant with strict isolation.
+  - Frontend Chat UI (`frontend/src/pages/ask.tsx`):
+    - Automatic history restoration: previous questions and answers appear in the conversation timeline on page mount.
+    - "Past Questions" drawer: shows recent business questions for 1-click re-prompting.
+    - "Clear History" button: includes confirmation dialog and instant reset of chat history.
+    - Keyboard shortcut: Enter key triggers instant question submission.
+  - **Test Score: 232 tests, all passing in <5s**
+
 
 
 

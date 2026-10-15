@@ -293,3 +293,40 @@ class TestAIService:
         guarded = _verify_llm_numbers(hallucinated_text, df, code_headline)
         # Should reject hallucination and fall back to verified code headline
         assert guarded == code_headline
+
+    @patch("services.ai_service.call_llm")
+    @patch("services.ai_service.call_llm_json")
+    def test_chat_message_persistence_and_management(self, mock_llm_json, mock_llm):
+        from services.ai_service import clear_chat_history, get_chat_history
+
+        tenant_a = "chat_test_tenant_a"
+        tenant_b = "chat_test_tenant_b"
+
+        # Start clean
+        clear_chat_history(tenant_a)
+        clear_chat_history(tenant_b)
+
+        assert get_chat_history(tenant_a) == []
+
+        mock_llm_json.return_value = {"intent": "net_profit"}
+        mock_llm.return_value = "Your net profit is verified."
+
+        # Ask question for Tenant A
+        ask_question("What is my net profit?", tenant_a)
+
+        # Tenant A has 1 message
+        history_a = get_chat_history(tenant_a)
+        assert len(history_a) == 1
+        assert history_a[0]["question"] == "What is my net profit?"
+        assert history_a[0]["intent"] == "net_profit"
+        assert "verified" in history_a[0]["answer_text"]
+
+        # Tenant B has 0 messages (Strict Tenant Isolation)
+        history_b = get_chat_history(tenant_b)
+        assert len(history_b) == 0
+
+        # Clear history for Tenant A
+        deleted_count = clear_chat_history(tenant_a)
+        assert deleted_count == 1
+        assert get_chat_history(tenant_a) == []
+

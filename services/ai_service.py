@@ -14,7 +14,8 @@ CORE ARCHITECTURAL PRINCIPLES:
 """
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,7 +24,7 @@ import pandas as pd
 from sqlalchemy import func
 
 from db.database import get_db
-from db.models import Sales, Expenses
+from db.models import ChatMessage, Expenses, Sales
 from llm.llm import call_llm, call_llm_json, LLMError
 
 logger = logging.getLogger(__name__)
@@ -707,7 +708,7 @@ def ask_question(question: str, tenant_id: str) -> Answer:
     # 4. Generate & verify conversational reply
     explanation = _explain_data(question, df, metric, period_label, headline)
 
-    return Answer(
+    answer = Answer(
         text=explanation,
         data=df,
         intent=intent,
@@ -716,3 +717,87 @@ def ask_question(question: str, tenant_id: str) -> Answer:
         period_label=period_label,
         headline=headline,
     )
+
+    # 5. Persist question and answer for chat history (Step 3.3)
+    _persist_chat_message(tenant_id, question, answer)
+
+    return answer
+
+
+# ── 6. Chat History Persistence & Management (Step 3.3) ────────────────────────
+def _persist_chat_message(tenant_id: str, question: str, answer: Answer) -> None:
+    """Save an answered question to the chat_messages table for this tenant."""
+    try:
+        table_json = None
+        if answer.data is not None and isinstance(answer.data, pd.DataFrame) and not answer.data.empty:
+            table_dict = {
+                "columns": list(answer.data.columns),
+                "rows": answer.data.head(25).to_dict(orient="records"),
+            }
+            table_json = json.dumps(table_dict, default=str)
+
+        with get_db() as db:
+            msg = ChatMessage(
+                tenant_id=tenant_id,
+                question=question.strip(),
+                answer_text=answer.text,
+                intent=answer.intent,
+                metric=answer.metric,
+                period=answer.period,
+                period_label=answer.period_label,
+                headline=answer.headline,
+                table_data=table_json,
+                created_at=datetime.utcnow(),
+            )
+            db.add(msg)
+            db.commit()
+    except Exception as exc:
+        logger.warning("Could not persist chat message for tenant %s: %s", tenant_id, exc)
+
+
+def get_chat_history(tenant_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Retrieve past Q&A history for a tenant in reverse chronological order (latest first).
+    """
+    with get_db() as db:
+        records = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.tenant_id == tenant_id)
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .limit(limit)
+            .all()
+        )
+        history = []
+        for r in records:
+            tbl = None
+            if r.table_data:
+                try:
+                    tbl = json.loads(r.table_data)
+                except Exception:
+                    tbl = None
+
+            history.append({
+                "id": r.id,
+                "question": r.question,
+                "answer_text": r.answer_text,
+                "intent": r.intent,
+                "metric": r.metric,
+                "period": r.period,
+                "period_label": r.period_label,
+                "headline": r.headline,
+                "table": tbl,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+        return history
+
+
+def clear_chat_history(tenant_id: str) -> int:
+    """
+    Deletes all saved chat history for a tenant.
+    Returns the number of deleted records.
+    """
+    with get_db() as db:
+        count = db.query(ChatMessage).filter(ChatMessage.tenant_id == tenant_id).delete()
+        db.commit()
+        return count
+
