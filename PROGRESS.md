@@ -152,6 +152,18 @@
   - Model schema update: widened `User.password_hash` to `String(255)`.
   - **Test Score: 194 tests, all passing**
 
+### Phase 1 — Quick Wins from Stored Data (2026-10-15)
+- **Step 1.1 — Comprehensive Dashboard Additions**:
+  - Date-range filtering: added optional `start_date` and `end_date` parameters to `/api/dashboard` and `/api/dashboard/trend`, respected by all SQL and Pandas aggregations.
+  - Category performance: aggregated revenue, units sold, transaction count, and revenue share percentage by `Sales.category` with horizontal bar chart presentation.
+  - Product volume & velocity: computed `total_units_sold` KPI, top 5 volume drivers, and bottom 5 lowest-moving items from `Sales.quantity` with UI toggle.
+  - Operations KPI: added `total_transactions` card tracking distinct orders across the selected period.
+  - Dual financial trend: enhanced `/api/dashboard/trend` to compute both revenue and expense curves across daily, ISO weekly, and monthly intervals.
+  - Visual Top Gainers & Decliners: added visual $+/-$ bar chart to the Month Comparison tab showing growing and shrinking catalog items.
+  - Expense anomaly enrichment: extracts specific expense transaction descriptions, categories, and amounts and displays them directly inside unusual activity alert cards.
+  - Code-built chart takeaways: generated plain-language takeaways under every chart strictly in Python code from computed metrics (Principle 1 & 2).
+  - **Test Score: 198 tests, all passing in <3s**
+
 ---
 
 ## 🏆 Project Achievements

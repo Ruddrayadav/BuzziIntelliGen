@@ -48,9 +48,16 @@ export type DashboardData = {
   total_expenses: number;
   net_profit: number;
   average_order_value: number;
+  total_transactions: number;
+  total_units_sold: number;
   revenue_trend: Array<{ date: string; revenue: number }>;
+  expense_trend: Array<{ date: string; amount: number }>;
   top_products: Array<{ product: string; revenue: number }>;
+  top_products_by_qty: Array<{ product: string; quantity: number; revenue: number }>;
+  bottom_products_by_qty: Array<{ product: string; quantity: number; revenue: number }>;
+  category_performance: Array<{ category: string; revenue: number; units_sold: number; order_count: number; share_pct: number }>;
   expense_breakdown: Array<{ category: string; amount: number }>;
+  takeaways?: Record<string, string>;
 };
 
 export type PeriodSummary = {
@@ -92,6 +99,7 @@ export type Anomaly = {
   anomaly_type: string;
   severity: "critical" | "warning" | "info";
   description: string;
+  expense_details?: Array<{ category: string; description: string; amount: number }>;
 };
 
 export type AnomalyReport = {
@@ -178,9 +186,21 @@ export const api = {
     if (replace) form.append("replace", "true");
     return request<UploadResult>("/api/upload/commit", { method: "POST", body: form });
   },
-  dashboard: () => request<DashboardData>("/api/dashboard"),
-  trend: (granularity: "daily" | "weekly" | "monthly" = "daily") =>
-    request<Array<{ label: string; revenue: number; date?: string }>>(`/api/dashboard/trend?granularity=${granularity}`),
+  dashboard: (startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams();
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    const q = params.toString();
+    return request<DashboardData>(`/api/dashboard${q ? `?${q}` : ""}`);
+  },
+  trend: (granularity: "daily" | "weekly" | "monthly" = "daily", startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams({ granularity });
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    return request<Array<{ label: string; revenue: number; expenses: number; date?: string }>>(
+      `/api/dashboard/trend?${params.toString()}`
+    );
+  },
   months: () => request<{ months: string[] }>("/api/analytics/months"),
   compare: (currentMonth?: string, priorMonth?: string) => request<PeriodComparison | null>(`/api/analytics/compare${monthsQuery(currentMonth, priorMonth)}`),
   anomalies: () => request<AnomalyReport>("/api/analytics/anomalies"),

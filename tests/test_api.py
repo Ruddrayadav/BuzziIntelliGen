@@ -453,5 +453,50 @@ def test_cookie_secure_flag_follows_env(monkeypatch):
     assert is_cookie_secure() is True
 
 
+def test_dashboard_endpoint_supports_date_filters_and_new_fields():
+    sales_file = _sample_sales_file()
+    with TestClient(app) as client:
+        _register(client, "api_user_a", "A Cafe")
+        
+        # Preview to get valid mapping
+        preview = client.post("/api/upload/preview", files={"file": ("sales.csv", sales_file, "text/csv")})
+        assert preview.status_code == 200
+        mapping = preview.json()["suggested_mapping"]
+
+        # Commit sales
+        res = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(mapping)},
+        )
+        assert res.status_code == 200
+
+        # Query full dashboard
+        dash_res = client.get("/api/dashboard")
+        assert dash_res.status_code == 200
+        data = dash_res.json()
+        assert "category_performance" in data
+        assert "total_transactions" in data
+        assert "total_units_sold" in data
+        assert "takeaways" in data
+        assert data["total_transactions"] > 0
+        assert data["total_units_sold"] > 0
+
+        # Query with date filter
+        filtered_res = client.get("/api/dashboard?start_date=2024-01-01&end_date=2024-01-02")
+        assert filtered_res.status_code == 200
+        filtered_data = filtered_res.json()
+        assert "total_revenue" in filtered_data
+
+        # Query trend with both revenue and expenses
+        trend_res = client.get("/api/dashboard/trend?granularity=weekly")
+        assert trend_res.status_code == 200
+        trend_data = trend_res.json()
+        assert len(trend_data) > 0
+        assert "revenue" in trend_data[0]
+        assert "expenses" in trend_data[0]
+
+
+
 
 

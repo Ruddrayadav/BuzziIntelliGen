@@ -205,6 +205,29 @@ class TestAnalyticsService:
         assert len(drops) >= 1
         assert drops[0].actual_value == 10.0
 
+    def test_detect_expense_anomalies_includes_descriptions(self):
+        with get_db() as db:
+            ul = UploadLog(tenant_id=TENANT, filename="test_exp.csv", file_type="expenses", row_count_raw=10, row_count_clean=10)
+            db.add(ul)
+            db.flush()
+
+            # Normal expense days
+            for d in range(1, 10):
+                db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 5, d), category="Supplies", description="Daily milk", amount=50.0))
+
+            # Major expense spike on day 10
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 5, 10), category="Equipment", description="New Espresso Machine", amount=2500.0))
+            db.commit()
+
+        report = detect_anomalies(TENANT, sensitivity=2.0)
+        assert len(report.expense_anomalies) >= 1
+        spike = report.expense_anomalies[0]
+        assert "New Espresso Machine" in spike.description
+        assert len(spike.expense_details) >= 1
+        assert spike.expense_details[0]["description"] == "New Espresso Machine"
+        assert spike.expense_details[0]["category"] == "Equipment"
+        assert spike.expense_details[0]["amount"] == 2500.0
+
     def test_diagnose_profit_growth(self):
         with get_db() as db:
             ul = UploadLog(tenant_id=TENANT, filename="test.csv", file_type="sales", row_count_raw=4, row_count_clean=4)

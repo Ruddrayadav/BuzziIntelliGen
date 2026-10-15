@@ -82,6 +82,7 @@ class Anomaly:
     anomaly_type: str     # "spike" or "drop"
     severity: str         # "critical", "warning", "info"
     description: str
+    expense_details: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -443,7 +444,12 @@ def detect_anomalies(
         s_query = db.query(Sales.date, Sales.revenue).filter(Sales.tenant_id == tenant_id).statement
         sales_df = pd.read_sql(s_query, db.bind)
         
-        e_query = db.query(Expenses.date, Expenses.amount).filter(Expenses.tenant_id == tenant_id).statement
+        e_query = db.query(
+            Expenses.date,
+            Expenses.category,
+            Expenses.description,
+            Expenses.amount,
+        ).filter(Expenses.tenant_id == tenant_id).statement
         exp_df = pd.read_sql(e_query, db.bind)
 
     if sales_df.empty and exp_df.empty:
@@ -517,7 +523,8 @@ def detect_anomalies(
                     z_score=round(z, 2),
                     anomaly_type=anomaly_type,
                     severity=severity,
-                    description=desc
+                    description=desc,
+                    expense_details=[],
                 ))
 
     # 2. Expense Anomalies
@@ -546,7 +553,31 @@ def detect_anomalies(
             if z >= sensitivity:
                 dev_pct = _calc_pct_change(actual, expected)
                 severity = "critical" if z >= 3.0 else ("warning" if z >= 2.0 else "info")
-                desc = f"Expense spike of ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f})"
+
+                # Extract individual expense records on that date
+                matching_items = exp_df[exp_df["date"] == row["date"]]
+                expense_items = []
+                top_item_desc = ""
+                if not matching_items.empty:
+                    for _, m_row in matching_items.iterrows():
+                        cat = str(m_row.get("category", "")).strip() or "General"
+                        raw_desc = str(m_row.get("description", "")).strip()
+                        desc_str = raw_desc if raw_desc and raw_desc.lower() != "nan" else ""
+                        amt = float(m_row.get("amount", 0.0))
+                        expense_items.append({
+                            "category": cat,
+                            "description": desc_str,
+                            "amount": round(amt, 2),
+                        })
+                    # Sort by amount descending
+                    expense_items.sort(key=lambda x: x["amount"], reverse=True)
+                    largest = expense_items[0]
+                    if largest["description"]:
+                        top_item_desc = f": {largest['description']} ({largest['category']} - ₹{largest['amount']:,.2f})"
+                    else:
+                        top_item_desc = f": {largest['category']} (₹{largest['amount']:,.2f})"
+
+                desc = f"Expense spike of ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f}){top_item_desc}"
                 
                 exp_anomalies.append(Anomaly(
                     date=row["date"],
@@ -558,7 +589,8 @@ def detect_anomalies(
                     z_score=round(z, 2),
                     anomaly_type="spike",
                     severity=severity,
-                    description=desc
+                    description=desc,
+                    expense_details=expense_items,
                 ))
 
     # Sort anomalies chronologically
