@@ -1,6 +1,6 @@
 import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
-import { AlertCircle, ArrowLeftRight, Check, ChevronDown, FileSpreadsheet, LoaderCircle, UploadCloud } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { AlertCircle, ArrowLeftRight, Check, ChevronDown, FileSpreadsheet, History, LoaderCircle, UploadCloud } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -140,9 +140,18 @@ export function UploadPage() {
   const step = hasDone && !active && !hasReady ? 4 : active && uploads.some((entry) => entry.status === "importing") ? 3 : uploads.length ? 2 : 1;
 
   return <section>
-    <p className="eyebrow">Add your business files</p>
-    <h1 className="mt-2 text-3xl font-bold tracking-tight">Bring your sales and expense records together.</h1>
-    <p className="mt-3 max-w-2xl leading-7 text-muted">Start with the files you already export from your billing or accounting tool. We will show what we found before anything is saved.</p>
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p className="eyebrow">Add your business files</p>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight">Bring your sales and expense records together.</h1>
+        <p className="mt-3 max-w-2xl leading-7 text-muted">Start with the files you already export from your billing or accounting tool. We will show what we found before anything is saved.</p>
+      </div>
+      <Button asChild variant="outline" size="sm" className="gap-1.5 text-xs w-fit">
+        <Link to="/history">
+          <History size={14} /> View Import History
+        </Link>
+      </Button>
+    </div>
     <Stepper step={step} />
 
     <button

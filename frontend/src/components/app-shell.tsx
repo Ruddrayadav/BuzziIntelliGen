@@ -1,4 +1,4 @@
-import { BarChart3, Bot, LogOut, Upload } from "lucide-react";
+import { BarChart3, Bot, History, LogOut, Upload } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { to: "/upload", label: "Upload", icon: Upload },
+  { to: "/history", label: "History", icon: History },
   { to: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { to: "/ask", label: "Ask AI", icon: Bot },
 ];

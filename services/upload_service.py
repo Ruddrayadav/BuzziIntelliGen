@@ -36,6 +36,8 @@ from typing import Optional
 
 import pandas as pd
 
+from sqlalchemy import func
+
 from config import settings
 from db.database import get_db, init_db
 from db.models import Expenses, Sales, UploadLog, RejectedRow
@@ -1001,4 +1003,120 @@ def execute_cashbook_upload(
         sales_upload_id=sales_res.upload_log_id if sales_res else None,
         expenses_upload_id=expenses_res.upload_log_id if expenses_res else None,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3.1: Import History & Audit Rollback
+# ─────────────────────────────────────────────────────────────────────────────
+def get_upload_history(tenant_id: str) -> list[dict]:
+    """
+    Return all imports for this tenant ordered from newest to oldest.
+    Includes counts of rows saved and rows skipped.
+    """
+    init_db()
+    with get_db() as db:
+        logs = (
+            db.query(UploadLog)
+            .filter(UploadLog.tenant_id == tenant_id)
+            .order_by(UploadLog.uploaded_at.desc())
+            .all()
+        )
+        results = []
+        for log in logs:
+            rejected_count = (
+                db.query(func.count(RejectedRow.id))
+                .filter(RejectedRow.upload_id == log.id, RejectedRow.tenant_id == tenant_id)
+                .scalar()
+                or 0
+            )
+            results.append({
+                "id": log.id,
+                "filename": log.filename,
+                "file_type": log.file_type,
+                "uploaded_at": log.uploaded_at.isoformat() if log.uploaded_at else None,
+                "rows_raw": log.row_count_raw or 0,
+                "rows_saved": log.row_count_clean or 0,
+                "rows_skipped": rejected_count,
+                "status": log.status or "success",
+                "notes": log.notes,
+                "has_rejected_rows": rejected_count > 0,
+            })
+        return results
+
+
+def get_upload_rejected_rows(tenant_id: str, upload_id: int) -> list[dict]:
+    """
+    Return stored skipped/rejected rows with reasons for an upload owned by the tenant.
+    """
+    init_db()
+    import json
+    with get_db() as db:
+        log = (
+            db.query(UploadLog)
+            .filter(UploadLog.id == upload_id, UploadLog.tenant_id == tenant_id)
+            .first()
+        )
+        if not log:
+            raise ValueError(f"Upload record #{upload_id} not found.")
+
+        rows = (
+            db.query(RejectedRow)
+            .filter(RejectedRow.upload_id == upload_id, RejectedRow.tenant_id == tenant_id)
+            .order_by(RejectedRow.id.asc())
+            .all()
+        )
+        results = []
+        for r in rows:
+            try:
+                parsed_data = json.loads(r.row_data) if r.row_data else {}
+            except Exception:
+                parsed_data = {"raw": r.row_data}
+            results.append({
+                "id": r.id,
+                "upload_id": r.upload_id,
+                "reason": r.reason,
+                "row_data": parsed_data,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+        return results
+
+
+def undo_upload(tenant_id: str, upload_id: int) -> dict:
+    """
+    Safely and atomically deletes an upload and all associated sales, expenses,
+    and rejected rows.
+    """
+    init_db()
+    with get_db() as db:
+        log = (
+            db.query(UploadLog)
+            .filter(UploadLog.id == upload_id, UploadLog.tenant_id == tenant_id)
+            .first()
+        )
+        if not log:
+            raise ValueError(f"Upload record #{upload_id} not found.")
+
+        filename = log.filename
+        file_type = log.file_type
+        saved_count = log.row_count_clean or 0
+
+        # Delete dependent data rows
+        db.query(Sales).filter(Sales.upload_id == upload_id, Sales.tenant_id == tenant_id).delete(synchronize_session=False)
+        db.query(Expenses).filter(Expenses.upload_id == upload_id, Expenses.tenant_id == tenant_id).delete(synchronize_session=False)
+        db.query(RejectedRow).filter(RejectedRow.upload_id == upload_id, RejectedRow.tenant_id == tenant_id).delete(synchronize_session=False)
+
+        # Delete upload log
+        db.delete(log)
+        db.commit()
+
+        logger.info("Upload #%d (%s) rolled back for tenant=%s", upload_id, filename, tenant_id)
+
+        return {
+            "success": True,
+            "deleted_upload_id": upload_id,
+            "filename": filename,
+            "rows_removed": saved_count,
+            "message": f"Successfully deleted import '{filename}' and all its associated data.",
+        }
+
 

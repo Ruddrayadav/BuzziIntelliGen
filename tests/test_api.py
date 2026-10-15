@@ -550,6 +550,93 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         assert "expenses" in trend_data[0]
 
 
+def test_upload_history_audit_and_undo_endpoints():
+    sales_file = _sample_sales_file()
+    valid_mapping = {
+        "order_id": "order_id",
+        "date": "date",
+        "item_name": "product",
+        "category": "category",
+        "qty": "quantity",
+        "unit_price": "unit_price",
+        "total": "revenue",
+    }
+
+    # 1. Unauthenticated requests are rejected (401)
+    with TestClient(app) as unauth_client:
+        assert unauth_client.get("/api/upload/history").status_code == 401
+        assert unauth_client.get("/api/upload/history/1/skipped").status_code == 401
+        assert unauth_client.delete("/api/upload/history/1").status_code == 401
+
+    # 2. User A uploads a file
+    with TestClient(app) as client_a:
+        _register(client_a, "api_hist_a", "History Cafe A")
+
+        # Initially empty history
+        init_history = client_a.get("/api/upload/history")
+        assert init_history.status_code == 200
+        assert init_history.json() == []
+
+        # Upload file
+        res = client_a.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(valid_mapping)},
+        )
+        assert res.status_code == 200
+        upload_id = res.json()["upload_log_id"]
+        assert upload_id is not None
+
+        # Verify history has 1 record
+        hist_res = client_a.get("/api/upload/history")
+        assert hist_res.status_code == 200
+        history_list = hist_res.json()
+        assert len(history_list) == 1
+        assert history_list[0]["id"] == upload_id
+        assert history_list[0]["filename"] == "sales.csv"
+        assert history_list[0]["file_type"] == "sales"
+        assert history_list[0]["rows_saved"] > 0
+
+        # Verify skipped rows endpoint
+        skipped_res = client_a.get(f"/api/upload/history/{upload_id}/skipped")
+        assert skipped_res.status_code == 200
+        assert isinstance(skipped_res.json(), list)
+
+        # 3. User B cannot see or delete User A's upload (Strict Tenant Isolation)
+        with TestClient(app) as client_b:
+            _register(client_b, "api_hist_b", "History Cafe B")
+
+            # User B history is empty
+            b_hist = client_b.get("/api/upload/history")
+            assert b_hist.status_code == 200
+            assert b_hist.json() == []
+
+            # User B cannot view User A's skipped rows -> 404
+            b_skipped = client_b.get(f"/api/upload/history/{upload_id}/skipped")
+            assert b_skipped.status_code == 404
+
+            # User B cannot delete User A's upload -> 404
+            b_delete = client_b.delete(f"/api/upload/history/{upload_id}")
+            assert b_delete.status_code == 404
+
+        # 4. User A performs rollback
+        del_res = client_a.delete(f"/api/upload/history/{upload_id}")
+        assert del_res.status_code == 200
+        del_data = del_res.json()
+        assert del_data["success"] is True
+        assert del_data["deleted_upload_id"] == upload_id
+
+        # History is now empty for User A
+        empty_hist = client_a.get("/api/upload/history")
+        assert empty_hist.status_code == 200
+        assert empty_hist.json() == []
+
+        # Second delete of same upload returns 404
+        del_again = client_a.delete(f"/api/upload/history/{upload_id}")
+        assert del_again.status_code == 404
+
+
+
 
 
 

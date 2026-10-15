@@ -10,6 +10,7 @@ import { QueryProvider } from "@/providers/query-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 
 const UploadPage = lazy(async () => ({ default: (await import("@/pages/upload")).UploadPage }));
+const HistoryPage = lazy(async () => ({ default: (await import("@/pages/history")).HistoryPage }));
 const DashboardPage = lazy(async () => ({ default: (await import("@/pages/dashboard")).DashboardPage }));
 const AskPage = lazy(async () => ({ default: (await import("@/pages/ask")).AskPage }));
 
@@ -24,6 +25,7 @@ export function App() {
     <Route path="/register" element={<RegisterPage />} />
     <Route element={<ProtectedShell />}>
       <Route path="/upload" element={<PageSuspense><UploadPage /></PageSuspense>} />
+      <Route path="/history" element={<PageSuspense><HistoryPage /></PageSuspense>} />
       <Route path="/dashboard" element={<PageSuspense><DashboardPage /></PageSuspense>} />
       <Route path="/ask" element={<PageSuspense><AskPage /></PageSuspense>} />
     </Route>

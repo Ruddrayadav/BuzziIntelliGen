@@ -43,6 +43,27 @@ export type UploadResult = {
   warnings: string[];
 };
 
+export type UploadHistoryItem = {
+  id: number;
+  filename: string;
+  file_type: string;
+  uploaded_at: string | null;
+  rows_raw: number;
+  rows_saved: number;
+  rows_skipped: number;
+  status: string;
+  notes?: string | null;
+  has_rejected_rows: boolean;
+};
+
+export type SkippedRowItem = {
+  id: number;
+  upload_id: number;
+  reason: string;
+  row_data: Record<string, unknown>;
+  created_at: string | null;
+};
+
 export type AttentionItem = {
   id: string;
   title: string;
@@ -303,6 +324,14 @@ export const api = {
       method: "DELETE",
     });
   },
+  uploadHistory: () => request<UploadHistoryItem[]>("/api/upload/history"),
+  uploadSkippedRows: (uploadId: number) =>
+    request<SkippedRowItem[]>(`/api/upload/history/${uploadId}/skipped`),
+  undoUpload: (uploadId: number) =>
+    request<{ success: boolean; message: string; deleted_upload_id: number }>(
+      `/api/upload/history/${uploadId}`,
+      { method: "DELETE" }
+    ),
   ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
 

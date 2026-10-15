@@ -165,3 +165,30 @@ async def commit_upload(
     }
     return to_jsonable(response)
 
+
+@router.get("/history")
+def upload_history(user: SessionUser = Depends(require_session)):
+    from services.upload_service import get_upload_history
+    return to_jsonable(get_upload_history(user.tenant_id))
+
+
+@router.get("/history/{upload_id}/skipped")
+def upload_skipped_rows(upload_id: int, user: SessionUser = Depends(require_session)):
+    from services.upload_service import get_upload_rejected_rows
+    try:
+        rows = get_upload_rejected_rows(user.tenant_id, upload_id)
+        return to_jsonable(rows)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.delete("/history/{upload_id}")
+def delete_upload(upload_id: int, user: SessionUser = Depends(require_session)):
+    from services.upload_service import undo_upload
+    try:
+        result = undo_upload(user.tenant_id, upload_id)
+        return to_jsonable(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+

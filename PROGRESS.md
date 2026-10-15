@@ -198,6 +198,24 @@
   - Frontend UI: created `TargetPacingCard` positioned directly below the core KPI grid with visual progress bar, expected-pace vertical marker, ahead/behind/on-track status badges, 4-stat metrics grid, and inline modal/form to set or change targets.
   - **Test Score: 220 tests, all passing in <4s**
 
+### Phase 3 — Trust, Control & Owner Output (2026-10-15)
+- **Step 3.1 — Import History Page & Audit Rollback**:
+  - Import History & Audit Service (`services/upload_service.py`):
+    - `get_upload_history(tenant_id)`: returns complete chronologically ordered log of past uploads (filename, type, timestamp, rows read, saved, and skipped).
+    - `get_upload_rejected_rows(tenant_id, upload_id)`: returns skipped rows with exact row numbers and human-readable rejection reasons (e.g. invalid date, negative revenue, missing fields).
+    - `undo_upload(tenant_id, upload_id)`: atomic rollback that safely removes the upload and cascades deletion across `Sales`, `Expenses`, and `RejectedRow` before removing the `UploadLog` entry within an atomic database transaction.
+  - API Endpoints (`api/routes/upload.py`):
+    - `GET /api/upload/history`: lists all uploads for the authenticated tenant.
+    - `GET /api/upload/history/{upload_id}/skipped`: retrieves rejected row audit items; enforces strict tenant isolation (returns 404 for cross-tenant access).
+    - `DELETE /api/upload/history/{upload_id}`: safely undos an upload and cascades deletion; returns 404 if not found or belongs to another tenant.
+  - Frontend History Page (`frontend/src/pages/history.tsx`):
+    - Full-featured Import History view with table of past imports, file type badges, formatted dates, and row counts.
+    - Interactive "View Skipped Rows" modal displaying row-by-row audit details, raw values, and rejection causes.
+    - "Undo Import" confirmation modal with danger warning and 1-click rollback, instantly updating the list.
+    - Added "History" link to main navigation shell and "View Import History" shortcut button on Upload page.
+  - **Test Score: 224 tests, all passing in <5s**
+
+
 ---
 
 ## 🏆 Project Achievements

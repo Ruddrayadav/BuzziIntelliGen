@@ -428,3 +428,110 @@ class TestExecuteUpload:
         assert res_b.success is True
         assert res_b.is_duplicate is False
 
+
+class TestImportHistoryAndRollback:
+    TENANT = "history_tenant_pytest"
+
+    def setup_method(self):
+        from db.database import get_db, init_db
+        from db.models import Expenses, RejectedRow, Sales, UploadLog
+        init_db()
+        with get_db() as db:
+            db.query(RejectedRow).filter(RejectedRow.tenant_id == self.TENANT).delete()
+            db.query(Sales).filter(Sales.tenant_id == self.TENANT).delete()
+            db.query(Expenses).filter(Expenses.tenant_id == self.TENANT).delete()
+            db.query(UploadLog).filter(UploadLog.tenant_id == self.TENANT).delete()
+            db.commit()
+
+    def teardown_method(self):
+        from db.database import get_db
+        from db.models import Expenses, RejectedRow, Sales, UploadLog
+        with get_db() as db:
+            db.query(RejectedRow).filter(RejectedRow.tenant_id == self.TENANT).delete()
+            db.query(Sales).filter(Sales.tenant_id == self.TENANT).delete()
+            db.query(Expenses).filter(Expenses.tenant_id == self.TENANT).delete()
+            db.query(UploadLog).filter(UploadLog.tenant_id == self.TENANT).delete()
+            db.commit()
+
+    def test_empty_tenant_returns_empty_history(self):
+        from services.upload_service import get_upload_history
+        assert get_upload_history("empty_nonexistent_tenant") == []
+
+    def test_upload_history_and_rejected_rows(self):
+        from services.upload_service import (
+            execute_upload,
+            get_upload_history,
+            get_upload_rejected_rows,
+            suggest_mapping_from_file,
+        )
+
+        data = _read_bytes("sample_sales.csv")
+        preview = suggest_mapping_from_file(data, "sample_sales.csv", "sales", use_llm=False)
+        confirmed = preview.suggested.to_rename_dict()
+
+        res = execute_upload(
+            preview.raw_df, confirmed, "sales", "sample_sales.csv", self.TENANT, file_hash="hash_hist_123"
+        )
+        assert res.success is True
+
+        history = get_upload_history(self.TENANT)
+        assert len(history) == 1
+        item = history[0]
+        assert item["id"] == res.upload_log_id
+        assert item["filename"] == "sample_sales.csv"
+        assert item["file_type"] == "sales"
+        assert item["rows_saved"] == res.clean_count
+        assert "uploaded_at" in item
+
+        # Test viewing rejected/skipped rows
+        rejected = get_upload_rejected_rows(self.TENANT, res.upload_log_id)
+        assert isinstance(rejected, list)
+
+        # Cannot view another tenant's upload
+        with pytest.raises(ValueError, match="not found"):
+            get_upload_rejected_rows("different_tenant", res.upload_log_id)
+
+    def test_undo_upload_atomically_deletes_all_records(self):
+        from db.database import get_db
+        from db.models import RejectedRow, Sales, UploadLog
+        from services.upload_service import (
+            execute_upload,
+            get_upload_history,
+            suggest_mapping_from_file,
+            undo_upload,
+        )
+
+        data = _read_bytes("sample_sales.csv")
+        preview = suggest_mapping_from_file(data, "sample_sales.csv", "sales", use_llm=False)
+        confirmed = preview.suggested.to_rename_dict()
+
+        res = execute_upload(
+            preview.raw_df, confirmed, "sales", "sample_sales.csv", self.TENANT, file_hash="hash_undo_456"
+        )
+        assert res.success is True
+
+        # Confirm data rows exist in DB
+        with get_db() as db:
+            sales_count = db.query(Sales).filter_by(tenant_id=self.TENANT, upload_id=res.upload_log_id).count()
+            assert sales_count == res.clean_count
+            assert db.query(UploadLog).filter_by(tenant_id=self.TENANT, id=res.upload_log_id).count() == 1
+
+        # Perform Undo
+        undo_res = undo_upload(self.TENANT, res.upload_log_id)
+        assert undo_res["success"] is True
+        assert undo_res["deleted_upload_id"] == res.upload_log_id
+
+        # Verify all records are deleted
+        with get_db() as db:
+            assert db.query(Sales).filter_by(tenant_id=self.TENANT, upload_id=res.upload_log_id).count() == 0
+            assert db.query(RejectedRow).filter_by(tenant_id=self.TENANT, upload_id=res.upload_log_id).count() == 0
+            assert db.query(UploadLog).filter_by(tenant_id=self.TENANT, id=res.upload_log_id).count() == 0
+
+        # History should now be empty
+        assert get_upload_history(self.TENANT) == []
+
+        # Undoing non-existent or foreign upload raises ValueError
+        with pytest.raises(ValueError, match="not found"):
+            undo_upload(self.TENANT, res.upload_log_id)
+
+
