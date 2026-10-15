@@ -15,7 +15,13 @@ import pandas as pd
 
 from db.database import get_db, init_db
 from db.models import Sales, Expenses, UploadLog
-from services.dashboard_service import get_dashboard_data, get_revenue_trend, DashboardData
+from services.dashboard_service import (
+    get_dashboard_data,
+    get_revenue_trend,
+    get_day_of_week_insights,
+    get_slow_movers,
+    DashboardData,
+)
 
 TENANT = "test_tenant_dash"
 
@@ -185,3 +191,70 @@ class TestDashboardService:
         assert "Food" in data.takeaways["category_performance"]
         assert "Burger" in data.takeaways["top_products"]
         assert "Rent" in data.takeaways["expense_breakdown"]
+
+    def test_day_of_week_insights_calculation(self):
+        # Empty tenant returns None
+        assert get_day_of_week_insights("empty_tenant") is None
+
+        _insert_sample_data()
+        insight = get_day_of_week_insights(TENANT)
+
+        assert insight is not None
+        assert "days" in insight
+        assert len(insight["days"]) == 7
+
+        # Mon 2024-01-01: 150 revenue; Tue 2024-01-02: 120 revenue
+        assert insight["best_day"] == "Monday"
+        assert insight["lowest_day"] == "Tuesday"
+        assert insight["best_avg_revenue"] == 150.0
+        assert insight["lowest_avg_revenue"] == 120.0
+
+        # Headline verification
+        assert "Mondays earn +25.0% more than Tuesdays" in insight["headline"]
+        assert "headline" in insight
+        assert "weekend_headline" in insight
+
+        # Date filter check
+        filtered_dow = get_day_of_week_insights(TENANT, start_date="2024-01-02", end_date="2024-01-02")
+        assert filtered_dow is not None
+        assert filtered_dow["best_day"] == "Tuesday"
+
+    def test_slow_movers_velocity_and_recommendations(self):
+        # Empty tenant returns empty list
+        assert get_slow_movers("empty_tenant") == []
+
+        _insert_sample_data()
+
+        # Add an older item to trigger "Stalled" status (last sold > 30 days before 2024-01-02)
+        with get_db() as db:
+            ul = db.query(UploadLog).filter_by(tenant_id=TENANT).first()
+            db.add(
+                Sales(
+                    tenant_id=TENANT,
+                    upload_id=ul.id,
+                    date=date(2023, 11, 1),
+                    order_id="OLD1",
+                    product="Old Salad",
+                    category="Food",
+                    quantity=1,
+                    revenue=40,
+                )
+            )
+            db.commit()
+
+        slow = get_slow_movers(TENANT, limit=10)
+        assert len(slow) == 4
+
+        # Verify old item is flagged as Stalled
+        stalled_item = next(item for item in slow if item["product"] == "Old Salad")
+        assert stalled_item["status"] == "Stalled"
+        assert stalled_item["days_since_last_sale"] > 30
+        assert "30+ days" in stalled_item["recommendation"]
+
+        # Results must be ordered by velocity ascending
+        assert slow[0]["weekly_velocity"] <= slow[-1]["weekly_velocity"]
+
+        # Dashboard data also exposes both fields
+        data = get_dashboard_data(TENANT)
+        assert data.day_of_week_insight is not None
+        assert len(data.slow_movers) == 4

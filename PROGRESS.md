@@ -185,6 +185,12 @@
   - API Integration: added `/api/dashboard/attention` endpoint and embedded `attention_items` in `DashboardData` from `/api/dashboard`.
   - UI Presentation: sleek Attention Panel at the top of the dashboard with severity badges, plain-English messages, and 1-click tab switching to `"diagnosis"`, `"compare"`, `"unusual"`, or `"overview"`.
   - **Test Score: 213 tests, all passing in <4s**
+- **Step 2.2 — Day-of-Week Intelligence & Slow-Movers List**:
+  - Day-of-Week Engine (`get_day_of_week_insights` in `services/dashboard_service.py`): groups sales across Monday–Sunday, calculating average daily revenue, transaction counts, and revenue shares. Computes peak vs trough comparison headline (e.g. `"Sundays earn +42.9% more than Wednesdays..."`) and weekend vs weekday performance ratio strictly in Python (Principle 1 & 2).
+  - Slow-Movers & Stock Velocity (`get_slow_movers` in `services/dashboard_service.py`): tracks unit sales velocity (`units / week`) and dormant intervals relative to the tenant's data anchor date (`max(Sales.date)`). Classifies items into `Stalled` (30+ days without a sale), `Sluggish` (<1 unit/wk), `Low Volume` (<=3 units total), or `Moderate`, pairing each with an actionable inventory recommendation.
+  - API Endpoints: exposed `/api/dashboard/day-of-week` and `/api/dashboard/slow-movers?limit=10`, and integrated both directly into `DashboardData` from `/api/dashboard`.
+  - Frontend UI: added `DayOfWeekCard` with headline comparison callouts, Recharts bar chart highlighting the peak day in brand blue, and collapsible detail data table; added `SlowMoversCard` with status badges, sales velocity, recency counter, and owner-friendly recommendations.
+  - **Test Score: 215 tests, all passing in <4s**
 
 ---
 

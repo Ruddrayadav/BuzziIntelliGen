@@ -9,11 +9,13 @@ import {
   BarChart3,
   Calendar,
   CheckCircle2,
+  Clock,
   Info,
   Layers,
   LoaderCircle,
   Package,
   ReceiptText,
+  ShoppingBag,
   Sparkles,
   TrendingDown,
   TrendingUp,
@@ -43,8 +45,11 @@ import {
   type Anomaly,
   type AttentionItem,
   type DashboardData,
+  type DayOfWeekDay,
+  type DayOfWeekInsight,
   type PeriodComparison,
   type ProfitDiagnosis,
+  type SlowMoverItem,
 } from "@/lib/api";
 import { money, plainDate, signedPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -453,6 +458,12 @@ function Overview({
           </ResponsiveContainer>
         )}
       </ChartCard>
+
+      {/* Row 4: Day-of-Week Intelligence */}
+      <DayOfWeekCard insight={data.day_of_week_insight} />
+
+      {/* Row 5: Slow-Movers List */}
+      <SlowMoversCard items={data.slow_movers} />
     </div>
   );
 }
@@ -1006,4 +1017,178 @@ function AttentionPanel({
     </div>
   );
 }
+
+function DayOfWeekCard({ insight }: { insight?: DayOfWeekInsight | null }) {
+  if (!insight || !insight.days || insight.days.length === 0) return null;
+
+  return (
+    <Card className="p-5 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3.5">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-8 w-8 place-items-center rounded-xl bg-blue-500/10 text-brand">
+            <Clock size={18} />
+          </span>
+          <div>
+            <h2 className="text-base font-bold text-ink">Day-of-Week Sales Performance</h2>
+            <p className="text-xs text-muted">
+              Analyze daily revenue patterns across Monday–Sunday to optimize staffing and purchasing
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">
+            Peak: {insight.best_day}
+          </span>
+        </div>
+      </div>
+
+      {/* Headlines / Takeaways */}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3.5 dark:border-blue-900/40 dark:bg-blue-950/20">
+          <p className="text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+            Peak vs Trough Pattern
+          </p>
+          <p className="mt-1 text-xs font-medium leading-relaxed text-ink">
+            {insight.headline}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 dark:border-slate-800 dark:bg-slate-900/40">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted">
+            Weekend vs Weekday Split
+          </p>
+          <p className="mt-1 text-xs font-medium leading-relaxed text-ink">
+            {insight.weekend_headline}
+          </p>
+        </div>
+      </div>
+
+      {/* Bar Chart */}
+      <div className="mt-5">
+        <ResponsiveContainer width="100%" height={250}>
+          <BarChart data={insight.days} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" opacity={0.4} />
+            <XAxis dataKey="day_name" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={money} tickLine={false} axisLine={false} width={76} tick={{ fontSize: 11 }} />
+            <Tooltip
+              formatter={(val, _name, item) => {
+                const payload = (item as { payload?: DayOfWeekDay }).payload;
+                return [
+                  `${money(Number(val))} avg (${payload?.order_count ?? 0} orders, ${payload?.share_pct ?? 0}% total share)`,
+                  "Daily Average",
+                ];
+              }}
+            />
+            <Bar dataKey="avg_revenue" name="Avg Daily Revenue" radius={[6, 6, 0, 0]}>
+              {insight.days.map((entry) => {
+                const isBest = entry.day_name === insight.best_day;
+                const isLowest = entry.day_name === insight.lowest_day;
+                return (
+                  <Cell
+                    key={entry.day_name}
+                    fill={isBest ? "#2563eb" : isLowest ? "#94a3b8" : "#60a5fa"}
+                  />
+                );
+              })}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <Details
+        rows={insight.days.map((d) => ({
+          day: d.day_name,
+          avg_daily_revenue: money(d.avg_revenue),
+          total_revenue: money(d.total_revenue),
+          order_count: d.order_count,
+          share_pct: `${d.share_pct}%`,
+        }))}
+      />
+    </Card>
+  );
+}
+
+function SlowMoversCard({ items }: { items?: SlowMoverItem[] }) {
+  if (!items) return null;
+
+  return (
+    <Card className="p-5 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3.5">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-8 w-8 place-items-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+            <ShoppingBag size={18} />
+          </span>
+          <div>
+            <h2 className="text-base font-bold text-ink">Slow-Movers & Stock Velocity</h2>
+            <p className="text-xs text-muted">
+              Products with sluggish turnover or dormant transactions that may tie up cash
+            </p>
+          </div>
+        </div>
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-muted dark:bg-slate-800">
+          {items.length === 0 ? "All items moving well" : `${items.length} item${items.length === 1 ? "" : "s"} flagged`}
+        </span>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="mt-6 flex flex-col items-center justify-center rounded-xl border border-dashed py-8 text-center">
+          <CheckCircle2 size={28} className="text-emerald-500" />
+          <p className="mt-2 text-sm font-semibold text-ink">Catalog Health Is Strong</p>
+          <p className="mt-1 text-xs text-muted">
+            All catalog items show healthy sales velocity and recent purchase activity.
+          </p>
+        </div>
+      ) : (
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-full text-left text-xs">
+            <thead className="border-b text-muted">
+              <tr>
+                <th className="px-3 py-2.5 font-semibold">Product</th>
+                <th className="px-3 py-2.5 font-semibold">Status</th>
+                <th className="px-3 py-2.5 font-semibold">Weekly Velocity</th>
+                <th className="px-3 py-2.5 font-semibold">Total Sold</th>
+                <th className="px-3 py-2.5 font-semibold">Last Sold</th>
+                <th className="px-3 py-2.5 font-semibold">Action Recommendation</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {items.map((item) => {
+                const statusStyles: Record<string, string> = {
+                  Stalled: "bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-200",
+                  Sluggish: "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200",
+                  "Low Volume": "bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-200",
+                  Moderate: "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-200",
+                };
+
+                return (
+                  <tr key={item.product} className="hover:bg-slate-50/60 dark:hover:bg-slate-900/40">
+                    <td className="px-3 py-2.5 font-semibold text-ink">{item.product}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold", statusStyles[item.status] ?? statusStyles.Moderate)}>
+                        {item.status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-ink font-medium">
+                      {item.weekly_velocity} units/wk
+                    </td>
+                    <td className="px-3 py-2.5 text-muted">
+                      <span className="font-medium text-ink">{item.units_sold}</span> units ({money(item.revenue)})
+                    </td>
+                    <td className="px-3 py-2.5 text-muted">
+                      {item.days_since_last_sale === 0 ? "Today" : `${item.days_since_last_sale}d ago`}
+                      <span className="block text-[10px] text-muted">{item.last_sold_date}</span>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-muted max-w-xs leading-relaxed">
+                      {item.recommendation}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 

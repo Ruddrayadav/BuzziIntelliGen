@@ -49,6 +49,8 @@ class DashboardData:
     category_performance: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=["category", "revenue", "units_sold", "order_count", "share_pct"]))
     takeaways: dict[str, str] = field(default_factory=dict)
     attention_items: list[dict[str, Any]] = field(default_factory=list)
+    day_of_week_insight: Optional[dict[str, Any]] = None
+    slow_movers: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _parse_filter_date(d_str: Optional[str]):
@@ -279,6 +281,8 @@ def get_dashboard_data(
         takeaways["expense_breakdown"] = "Import expense records to visualize where your operational funds are spent."
 
     attention_items = get_attention_items(tenant_id)
+    dow_insight = get_day_of_week_insights(tenant_id, start_date=start_date, end_date=end_date)
+    slow_movers = get_slow_movers(tenant_id, start_date=start_date, end_date=end_date)
 
     return DashboardData(
         total_revenue=float(revenue),
@@ -296,6 +300,8 @@ def get_dashboard_data(
         category_performance=category_perf,
         takeaways=takeaways,
         attention_items=attention_items,
+        day_of_week_insight=dow_insight,
+        slow_movers=slow_movers,
     )
 
 
@@ -412,3 +418,200 @@ def get_revenue_trend(
         merged["label"] = pd.to_datetime(merged["min_date"]).dt.strftime("%b %Y")
         merged["date"] = pd.to_datetime(merged["min_date"]).dt.strftime("%Y-%m-%d")
         return merged[["date", "label", "revenue", "expenses"]]
+
+
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def get_day_of_week_insights(
+    tenant_id: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """
+    Calculate sales performance by day of the week (Monday through Sunday),
+    providing average daily revenue, transaction counts, and code-built comparison headlines.
+    """
+    start_dt = _parse_filter_date(start_date)
+    end_dt = _parse_filter_date(end_date)
+
+    with get_db() as db:
+        q = db.query(
+            Sales.date,
+            Sales.revenue,
+            Sales.order_id,
+        ).filter(Sales.tenant_id == tenant_id)
+
+        if start_dt:
+            q = q.filter(Sales.date >= start_dt)
+        if end_dt:
+            q = q.filter(Sales.date <= end_dt)
+
+        sales_df = pd.read_sql(q.statement, db.bind)
+
+    if sales_df.empty:
+        return None
+
+    sales_df["date"] = pd.to_datetime(sales_df["date"])
+    sales_df["day_index"] = sales_df["date"].dt.dayofweek  # 0=Monday, 6=Sunday
+    sales_df["day_name"] = sales_df["date"].dt.day_name()
+
+    total_rev_all = float(sales_df["revenue"].sum())
+
+    days_data = []
+    distinct_dates_by_day = sales_df.groupby("day_index")["date"].nunique().to_dict()
+
+    for idx, day_name in enumerate(DAY_NAMES):
+        sub = sales_df[sales_df["day_index"] == idx]
+        if sub.empty:
+            days_data.append({
+                "day_index": idx,
+                "day_name": day_name,
+                "total_revenue": 0.0,
+                "avg_revenue": 0.0,
+                "order_count": 0,
+                "share_pct": 0.0,
+            })
+            continue
+
+        tot_rev = float(sub["revenue"].sum())
+        n_dates = distinct_dates_by_day.get(idx, 1)
+        avg_rev = round(tot_rev / max(1, n_dates), 2)
+        n_orders = int(sub["order_id"].dropna().nunique()) if "order_id" in sub.columns else len(sub)
+        share = round((tot_rev / total_rev_all) * 100.0, 1) if total_rev_all > 0 else 0.0
+
+        days_data.append({
+            "day_index": idx,
+            "day_name": day_name,
+            "total_revenue": round(tot_rev, 2),
+            "avg_revenue": avg_rev,
+            "order_count": n_orders,
+            "share_pct": share,
+        })
+
+    active_days = [d for d in days_data if d["avg_revenue"] > 0]
+    if not active_days:
+        return None
+
+    best = max(active_days, key=lambda x: x["avg_revenue"])
+    lowest = min(active_days, key=lambda x: x["avg_revenue"])
+
+    if best["day_name"] != lowest["day_name"] and lowest["avg_revenue"] > 0:
+        pct_diff = round(((best["avg_revenue"] - lowest["avg_revenue"]) / lowest["avg_revenue"]) * 100.0, 1)
+        headline = (
+            f"{best['day_name']}s earn {pct_diff:+.1f}% more than {lowest['day_name']}s "
+            f"(avg ₹{best['avg_revenue']:,.2f} vs ₹{lowest['avg_revenue']:,.2f} per day)."
+        )
+    else:
+        headline = f"Peak daily revenue occurs on {best['day_name']}s averaging ₹{best['avg_revenue']:,.2f}."
+
+    weekdays = [d for d in days_data if d["day_index"] < 5 and d["avg_revenue"] > 0]
+    weekends = [d for d in days_data if d["day_index"] >= 5 and d["avg_revenue"] > 0]
+
+    weekday_avg = float(np.mean([d["avg_revenue"] for d in weekdays])) if weekdays else 0.0
+    weekend_avg = float(np.mean([d["avg_revenue"] for d in weekends])) if weekends else 0.0
+
+    if weekend_avg > 0 and weekday_avg > 0:
+        we_diff_pct = round(((weekend_avg - weekday_avg) / weekday_avg) * 100.0, 1)
+        we_dir = "higher" if we_diff_pct >= 0 else "lower"
+        weekend_headline = (
+            f"Weekend days average {abs(we_diff_pct):.1f}% {we_dir} daily revenue "
+            f"(₹{weekend_avg:,.2f}) compared to weekdays (₹{weekday_avg:,.2f})."
+        )
+    else:
+        weekend_headline = "Insufficient weekday and weekend coverage for comparison."
+
+    return {
+        "days": days_data,
+        "best_day": best["day_name"],
+        "lowest_day": lowest["day_name"],
+        "best_avg_revenue": best["avg_revenue"],
+        "lowest_avg_revenue": lowest["avg_revenue"],
+        "headline": headline,
+        "weekend_headline": weekend_headline,
+    }
+
+
+def get_slow_movers(
+    tenant_id: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Identify slow-moving products by calculating unit sales velocity,
+    days since last transaction (relative to tenant anchor date), and actionable recommendations.
+    """
+    start_dt = _parse_filter_date(start_date)
+    end_dt = _parse_filter_date(end_date)
+
+    with get_db() as db:
+        max_d = db.query(func.max(Sales.date)).filter(Sales.tenant_id == tenant_id).scalar()
+        if not max_d:
+            return []
+
+        q = db.query(
+            Sales.product,
+            func.sum(Sales.quantity).label("units_sold"),
+            func.sum(Sales.revenue).label("revenue"),
+            func.min(Sales.date).label("first_date"),
+            func.max(Sales.date).label("last_date"),
+            func.count(Sales.id).label("transactions"),
+        ).filter(Sales.tenant_id == tenant_id)
+
+        if start_dt:
+            q = q.filter(Sales.date >= start_dt)
+        if end_dt:
+            q = q.filter(Sales.date <= end_dt)
+
+        df = pd.read_sql(q.group_by(Sales.product).statement, db.bind)
+
+    if df.empty:
+        return []
+
+    df["units_sold"] = df["units_sold"].fillna(1.0).astype(float)
+    df["revenue"] = df["revenue"].fillna(0.0).astype(float).round(2)
+    df["last_date"] = pd.to_datetime(df["last_date"]).dt.date
+    df["first_date"] = pd.to_datetime(df["first_date"]).dt.date
+
+    anchor = max_d
+    results = []
+
+    for _, row in df.iterrows():
+        p_name = str(row["product"])
+        units = float(row["units_sold"])
+        rev = float(row["revenue"])
+        last_d = row["last_date"]
+        first_d = row["first_date"]
+
+        days_since_sale = (anchor - last_d).days if last_d else 0
+        active_span_days = max(1, (anchor - first_d).days)
+        weekly_velocity = round((units / active_span_days) * 7.0, 1)
+
+        if days_since_sale >= 30:
+            status = "Stalled"
+            recommendation = "No sales in 30+ days. Consider bundling with a best-seller or running a clearance discount."
+        elif weekly_velocity < 1.0:
+            status = "Sluggish"
+            recommendation = "Selling less than 1 unit per week. Review menu placement or consider phasing out."
+        elif units <= 3:
+            status = "Low Volume"
+            recommendation = "Low total volume. Test customer awareness with sample promotions."
+        else:
+            status = "Moderate"
+            recommendation = "Maintain safe minimum stock levels to avoid tied-up working capital."
+
+        results.append({
+            "product": p_name,
+            "units_sold": units,
+            "revenue": rev,
+            "last_sold_date": str(last_d),
+            "days_since_last_sale": days_since_sale,
+            "weekly_velocity": weekly_velocity,
+            "status": status,
+            "recommendation": recommendation,
+        })
+
+    results.sort(key=lambda x: (x["weekly_velocity"], -x["days_since_last_sale"]))
+    return results[:limit]
+

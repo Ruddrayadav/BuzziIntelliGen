@@ -484,6 +484,8 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         assert "total_units_sold" in data
         assert "takeaways" in data
         assert "attention_items" in data
+        assert "day_of_week_insight" in data
+        assert "slow_movers" in data
         assert isinstance(data["attention_items"], list)
         assert data["total_transactions"] > 0
         assert data["total_units_sold"] > 0
@@ -494,6 +496,20 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         att_data = att_res.json()
         assert isinstance(att_data, list)
         assert len(att_data) > 0
+
+        # Query day-of-week endpoint
+        dow_res = client.get("/api/dashboard/day-of-week")
+        assert dow_res.status_code == 200
+        dow_data = dow_res.json()
+        assert "days" in dow_data
+        assert "headline" in dow_data
+
+        # Query slow-movers endpoint
+        sm_res = client.get("/api/dashboard/slow-movers?limit=5")
+        assert sm_res.status_code == 200
+        sm_data = sm_res.json()
+        assert isinstance(sm_data, list)
+        assert len(sm_data) <= 5
 
         # Query with date filter
         filtered_res = client.get("/api/dashboard?start_date=2024-01-01&end_date=2024-01-02")
@@ -508,6 +524,7 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         assert len(trend_data) > 0
         assert "revenue" in trend_data[0]
         assert "expenses" in trend_data[0]
+
 
 
 

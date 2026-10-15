@@ -53,6 +53,36 @@ export type AttentionItem = {
   score?: number;
 };
 
+export type DayOfWeekDay = {
+  day_index: number;
+  day_name: string;
+  total_revenue: number;
+  avg_revenue: number;
+  order_count: number;
+  share_pct: number;
+};
+
+export type DayOfWeekInsight = {
+  days: DayOfWeekDay[];
+  best_day: string;
+  lowest_day: string;
+  best_avg_revenue: number;
+  lowest_avg_revenue: number;
+  headline: string;
+  weekend_headline: string;
+};
+
+export type SlowMoverItem = {
+  product: string;
+  units_sold: number;
+  revenue: number;
+  last_sold_date: string;
+  days_since_last_sale: number;
+  weekly_velocity: number;
+  status: "Stalled" | "Sluggish" | "Low Volume" | "Moderate";
+  recommendation: string;
+};
+
 export type DashboardData = {
   total_revenue: number;
   total_expenses: number;
@@ -69,6 +99,8 @@ export type DashboardData = {
   expense_breakdown: Array<{ category: string; amount: number }>;
   takeaways?: Record<string, string>;
   attention_items?: AttentionItem[];
+  day_of_week_insight?: DayOfWeekInsight | null;
+  slow_movers?: SlowMoverItem[];
 };
 
 export type PeriodSummary = {
@@ -221,6 +253,19 @@ export const api = {
   anomalies: () => request<AnomalyReport>("/api/analytics/anomalies"),
   diagnosis: (currentMonth?: string, priorMonth?: string) => request<ProfitDiagnosis | null>(`/api/analytics/diagnosis${monthsQuery(currentMonth, priorMonth)}`),
   attention: () => request<AttentionItem[]>("/api/dashboard/attention"),
+  dayOfWeek: (startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams();
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    const q = params.toString();
+    return request<DayOfWeekInsight | null>(`/api/dashboard/day-of-week${q ? `?${q}` : ""}`);
+  },
+  slowMovers: (startDate?: string, endDate?: string, limit = 10) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    return request<SlowMoverItem[]>(`/api/dashboard/slow-movers?${params.toString()}`);
+  },
   ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
 

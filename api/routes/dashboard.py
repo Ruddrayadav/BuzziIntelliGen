@@ -43,3 +43,25 @@ def dashboard_attention(user: SessionUser = Depends(require_session)):
     return to_jsonable(get_attention_items(user.tenant_id))
 
 
+@router.get("/dashboard/day-of-week")
+def dashboard_day_of_week(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    user: SessionUser = Depends(require_session),
+):
+    from services.dashboard_service import get_day_of_week_insights
+    return to_jsonable(get_day_of_week_insights(user.tenant_id, start_date=start_date, end_date=end_date))
+
+
+@router.get("/dashboard/slow-movers")
+def dashboard_slow_movers(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: int = Query(10, ge=1, le=50),
+    user: SessionUser = Depends(require_session),
+):
+    from services.dashboard_service import get_slow_movers
+    return to_jsonable(get_slow_movers(user.tenant_id, start_date=start_date, end_date=end_date, limit=limit))
+
+
+
