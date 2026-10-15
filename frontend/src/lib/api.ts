@@ -130,6 +130,10 @@ export type ProfitDiagnosis = {
 export type AskAnswer = {
   text: string;
   intent: string;
+  metric?: string;
+  period?: string;
+  period_label?: string;
+  headline?: string;
   table: { columns: string[]; rows: Array<Record<string, unknown>> };
 };
 

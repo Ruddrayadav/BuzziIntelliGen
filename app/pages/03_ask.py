@@ -17,7 +17,7 @@ TENANT_ID = st.session_state.get("tenant_id", "demo_user")
 BUSINESS_NAME = st.session_state.get("business_name", "Your Business")
 
 st.title("🤖 Ask AI Business Analyst")
-st.caption(f"Ask questions about **{BUSINESS_NAME}** in plain English. Every number is 100% verified against your real database records.")
+st.caption(f"Ask questions about **{BUSINESS_NAME}** in plain English. Answers are calculated directly from your real database records.")
 
 # Sidebar helper / Clear Chat
 with st.sidebar:

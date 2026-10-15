@@ -381,7 +381,11 @@ def test_ask_ai_endpoint_success_and_offline_503():
             assert res.status_code == 200
             data = res.json()
             assert data["intent"] == "net_profit"
-            assert data["text"] == "Your net profit is 0."
+            assert "Your net profit is 0." in data["text"]
+            assert data["metric"] == "revenue"
+            assert data["period"] == "all"
+            assert data["period_label"] == "All time"
+            assert "headline" in data and isinstance(data["headline"], str)
 
         # 2. Ollama offline: returns 503 Service Unavailable with friendly message
         with patch("services.ai_service.call_llm_json") as mock_json:

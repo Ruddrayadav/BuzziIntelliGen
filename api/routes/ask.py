@@ -22,6 +22,10 @@ def ask(payload: AskRequest, user: SessionUser = Depends(require_session)):
     return to_jsonable({
         "text": answer.text,
         "intent": answer.intent,
+        "metric": answer.metric,
+        "period": answer.period,
+        "period_label": answer.period_label,
+        "headline": answer.headline,
         "table": {
             "columns": [] if answer.data is None else answer.data.columns.tolist(),
             "rows": [] if answer.data is None else answer.data,

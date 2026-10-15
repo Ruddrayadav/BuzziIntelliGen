@@ -9,7 +9,11 @@ type Message = { id: string; role: "user" | "assistant"; text: string; answer?: 
 
 const suggestions = [
   "What are my top 5 products?",
+  "Which items sold the lowest volume?",
+  "What was my highest revenue month?",
+  "What were my biggest expenses?",
   "What is my net profit?",
+  "How is my business performing?",
   "Compare this month with last month",
   "Are there any unusual spikes or drops?",
   "Why did profit change between periods?",
@@ -59,7 +63,33 @@ function ChatMessage({ message }: { message: Message }) {
 function Avatar({ type }: { type: "assistant" | "user" }) { return <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${type === "assistant" ? "bg-blue-50 text-brand dark:bg-blue-950" : "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-100"}`}>{type === "assistant" ? <Bot size={18} /> : <UserRound size={18} />}</span>; }
 
 function SourcePanel({ answer }: { answer: AskAnswer }) {
-  return <details className="w-full rounded-xl border bg-surface p-3"><summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold"><Sparkles size={16} className="text-brand" /> How I got this <span className="ml-auto text-xs font-normal text-muted">Calculated from your data</span></summary><div className="mt-4 space-y-3"><p className="text-sm text-muted">Question type: <strong className="font-medium text-ink">{friendlyIntent(answer.intent)}</strong></p>{answer.table.columns.length === 0 ? <p className="text-sm text-muted">There was no source table for this answer.</p> : <SourceTable columns={answer.table.columns} rows={answer.table.rows} />}</div></details>;
+  return (
+    <details className="w-full rounded-xl border bg-surface p-3.5">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold">
+        <Sparkles size={16} className="text-brand" />
+        <span>How I got this</span>
+        <span className="ml-auto text-xs font-normal text-muted">Calculated from your data</span>
+      </summary>
+      <div className="mt-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-4 text-xs text-muted">
+          <span>Question Intent: <strong className="font-semibold text-ink">{friendlyIntent(answer.intent)}</strong></span>
+          {answer.metric && <span>Metric: <strong className="font-semibold uppercase text-ink">{answer.metric}</strong></span>}
+          {answer.period_label && <span>Period: <strong className="font-semibold text-ink">{answer.period_label}</strong></span>}
+        </div>
+        {answer.headline && (
+          <div className="rounded-lg border border-blue-100 bg-blue-50/70 p-2.5 text-xs text-blue-900 dark:border-blue-900/40 dark:bg-blue-950/40 dark:text-blue-200">
+            <span className="mb-0.5 block font-semibold">Code-verified calculation:</span>
+            {answer.headline}
+          </div>
+        )}
+        {answer.table.columns.length === 0 ? (
+          <p className="text-sm text-muted">There was no source table for this answer.</p>
+        ) : (
+          <SourceTable columns={answer.table.columns} rows={answer.table.rows} />
+        )}
+      </div>
+    </details>
+  );
 }
 
 function SourceTable({ columns, rows }: { columns: string[]; rows: Array<Record<string, unknown>> }) { return <div className="overflow-x-auto"><table className="min-w-full text-left text-xs"><thead className="border-b text-muted"><tr>{columns.map((column) => <th key={column} className="whitespace-nowrap px-2 py-2 font-medium">{column}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td className="px-2 py-3 text-muted" colSpan={columns.length}>No rows were returned.</td></tr> : rows.map((row, index) => <tr key={index} className="border-b last:border-0">{columns.map((column) => <td key={column} className="whitespace-nowrap px-2 py-2">{String(row[column] ?? "—")}</td>)}</tr>)}</tbody></table></div>; }
