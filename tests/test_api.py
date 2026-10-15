@@ -483,8 +483,17 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         assert "total_transactions" in data
         assert "total_units_sold" in data
         assert "takeaways" in data
+        assert "attention_items" in data
+        assert isinstance(data["attention_items"], list)
         assert data["total_transactions"] > 0
         assert data["total_units_sold"] > 0
+
+        # Query attention endpoint
+        att_res = client.get("/api/dashboard/attention")
+        assert att_res.status_code == 200
+        att_data = att_res.json()
+        assert isinstance(att_data, list)
+        assert len(att_data) > 0
 
         # Query with date filter
         filtered_res = client.get("/api/dashboard?start_date=2024-01-01&end_date=2024-01-02")

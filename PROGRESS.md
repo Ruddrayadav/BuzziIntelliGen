@@ -173,6 +173,19 @@
   - Cleaned all ungrounded "100% accurate/verified" claims from codebase and documentation.
   - **Test Score: 206 tests, all passing in <4s**
 
+### Phase 2 — Decision Support (2026-10-15)
+- **Step 2.1 — "What Needs Your Attention" Decision Support Panel**:
+  - Decision Support Engine (`services/attention_service.py`): built 100% in Python code (Principle 1 & 2), evaluating 5 operational and financial risk signals.
+  - Signal 1 (Profit Drop): detects month-over-month profit shifts and isolates the primary driver from `diagnose_profit_drop`.
+  - Signal 2 (Cost vs Revenue Pacing): flags when any expense category % growth outpaces revenue growth by >10 percentage points.
+  - Signal 3 (Expense Surges): highlights the category with the single largest currency jump.
+  - Signal 4 (Stalled Products): computes established catalog items with zero sales in the 30 days up to the data anchor date (`max(Sales.date)`).
+  - Signal 5 (Statistical Anomalies): surfaces recent critical/warning revenue or expense outliers from `detect_anomalies`.
+  - Prioritization & Cap: ranks items by severity (`critical` > `warning` > `info`) and impact score, capped at top 5 items (with an "All Clear" healthy state if no issues exist).
+  - API Integration: added `/api/dashboard/attention` endpoint and embedded `attention_items` in `DashboardData` from `/api/dashboard`.
+  - UI Presentation: sleek Attention Panel at the top of the dashboard with severity badges, plain-English messages, and 1-click tab switching to `"diagnosis"`, `"compare"`, `"unusual"`, or `"overview"`.
+  - **Test Score: 213 tests, all passing in <4s**
+
 ---
 
 ## 🏆 Project Achievements

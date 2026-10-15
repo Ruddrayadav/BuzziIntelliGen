@@ -14,13 +14,14 @@ PRINCIPLE 1 & 2:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 import numpy as np
 import pandas as pd
 from sqlalchemy import func
 
 from db.database import get_db
 from db.models import Sales, Expenses
+from services.attention_service import get_attention_items
 
 
 @dataclass
@@ -47,6 +48,7 @@ class DashboardData:
     bottom_products_by_qty: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=["product", "quantity", "revenue"]))
     category_performance: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=["category", "revenue", "units_sold", "order_count", "share_pct"]))
     takeaways: dict[str, str] = field(default_factory=dict)
+    attention_items: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _parse_filter_date(d_str: Optional[str]):
@@ -276,6 +278,8 @@ def get_dashboard_data(
     else:
         takeaways["expense_breakdown"] = "Import expense records to visualize where your operational funds are spent."
 
+    attention_items = get_attention_items(tenant_id)
+
     return DashboardData(
         total_revenue=float(revenue),
         total_expenses=float(expenses),
@@ -291,6 +295,7 @@ def get_dashboard_data(
         bottom_products_by_qty=bottom_products_by_qty,
         category_performance=category_perf,
         takeaways=takeaways,
+        attention_items=attention_items,
     )
 
 

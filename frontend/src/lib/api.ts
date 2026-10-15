@@ -43,6 +43,16 @@ export type UploadResult = {
   warnings: string[];
 };
 
+export type AttentionItem = {
+  id: string;
+  title: string;
+  message: string;
+  severity: "critical" | "warning" | "info";
+  action_tab: "overview" | "comparison" | "anomalies" | "diagnostics";
+  action_label: string;
+  score?: number;
+};
+
 export type DashboardData = {
   total_revenue: number;
   total_expenses: number;
@@ -58,6 +68,7 @@ export type DashboardData = {
   category_performance: Array<{ category: string; revenue: number; units_sold: number; order_count: number; share_pct: number }>;
   expense_breakdown: Array<{ category: string; amount: number }>;
   takeaways?: Record<string, string>;
+  attention_items?: AttentionItem[];
 };
 
 export type PeriodSummary = {
@@ -209,6 +220,7 @@ export const api = {
   compare: (currentMonth?: string, priorMonth?: string) => request<PeriodComparison | null>(`/api/analytics/compare${monthsQuery(currentMonth, priorMonth)}`),
   anomalies: () => request<AnomalyReport>("/api/analytics/anomalies"),
   diagnosis: (currentMonth?: string, priorMonth?: string) => request<ProfitDiagnosis | null>(`/api/analytics/diagnosis${monthsQuery(currentMonth, priorMonth)}`),
+  attention: () => request<AttentionItem[]>("/api/dashboard/attention"),
   ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
 

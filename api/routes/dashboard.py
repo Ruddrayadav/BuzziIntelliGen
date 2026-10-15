@@ -36,3 +36,10 @@ def dashboard_trend(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+
+@router.get("/dashboard/attention")
+def dashboard_attention(user: SessionUser = Depends(require_session)):
+    from services.attention_service import get_attention_items
+    return to_jsonable(get_attention_items(user.tenant_id))
+
+
