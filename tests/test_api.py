@@ -21,6 +21,7 @@ API_USERS = (
     "api_dupe_user",
     "api_analytics_user",
     "api_ask_user",
+    "api_rate_user",
 )
 SAMPLES_DIR = Path(__file__).parent.parent / "data" / "samples"
 
@@ -389,6 +390,68 @@ def test_ask_ai_endpoint_success_and_offline_503():
             res_offline = client.post("/api/ask", json={"question": "What is my profit?"})
             assert res_offline.status_code == 503
             assert "The AI is not available right now" in res_offline.json()["message"]
+
+
+def test_registration_rejects_password_under_8_characters():
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/auth/register",
+            json={"username": "short_pwd_user", "password": "123", "business_name": "Short Cafe"},
+        )
+        assert res.status_code == 422
+
+
+def test_login_rate_limiting_returns_429():
+    from api.routes.auth import reset_rate_limits
+    reset_rate_limits()
+    try:
+        with TestClient(app) as client:
+            _register(client, "api_rate_user", "Rate Cafe")
+
+            # 5 failed attempts
+            for i in range(5):
+                res = client.post(
+                    "/api/auth/login",
+                    json={"username": "api_rate_user", "password": "wrong-password"},
+                )
+                assert res.status_code == 401, f"Attempt {i+1} should return 401"
+
+            # 6th failed attempt within 10 minutes returns 429
+            res6 = client.post(
+                "/api/auth/login",
+                json={"username": "api_rate_user", "password": "wrong-password"},
+            )
+            assert res6.status_code == 429
+            assert "Too many failed login attempts" in res6.json()["message"]
+    finally:
+        reset_rate_limits()
+
+
+def test_startup_refuses_insecure_placeholder_secret(monkeypatch):
+    from api.deps import validate_session_secret
+    
+    # Missing secret
+    monkeypatch.delenv("BIZINTEL_SESSION_SECRET", raising=False)
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_session_secret()
+    assert "missing or still set to the insecure placeholder" in str(exc_info.value)
+
+    # Insecure placeholder secret
+    monkeypatch.setenv("BIZINTEL_SESSION_SECRET", "replace-with-a-long-random-secret")
+    with pytest.raises(RuntimeError) as exc_info2:
+        validate_session_secret()
+    assert "missing or still set to the insecure placeholder" in str(exc_info2.value)
+
+
+def test_cookie_secure_flag_follows_env(monkeypatch):
+    from api.deps import is_cookie_secure
+
+    monkeypatch.setenv("BIZINTEL_COOKIE_SECURE", "false")
+    assert is_cookie_secure() is False
+
+    monkeypatch.setenv("BIZINTEL_COOKIE_SECURE", "true")
+    assert is_cookie_secure() is True
+
 
 
 

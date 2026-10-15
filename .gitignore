@@ -17,6 +17,8 @@ data/biz_intelligence.db-wal
 *.db
 *.db-shm
 *.db-wal
+*.backup*
+*.db.backup*
 
 # Scratch files (diagnostics / one-off scripts)
 scratch/

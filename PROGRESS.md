@@ -141,6 +141,16 @@
   - Auto-selection of complete months: when comparing periods without explicit months, defaults only to periods that have both sales and expenses.
   - Frontend error clarity: `ApiError` captures FastAPI `detail` messages for friendly red alert banner display in Ask AI and Dashboard tabs.
   - **Test Score: 188 tests, all passing**
+- **Step 0.5 — Auth Hardening & Production Reliability**:
+  - Upgraded password hashing from raw SHA-256 to `hashlib.scrypt` ($n=16384, r=8, p=1, dklen=64$) in self-describing format (`scrypt$16384$8$1$<salt_hex>$<hash_hex>`) with `hmac.compare_digest`.
+  - Transparent upgrade on login: authenticates legacy 64-character SHA-256 hashes and transparently re-hashes them to modern scrypt in the database without user interruption.
+  - Enforced minimum 8-character password constraint across service (`register_user`) and API schema (`RegisterRequest`).
+  - Rate limiting protection: 5 failed login attempts per username and client IP within a 10-minute sliding window triggers HTTP 429 Too Many Requests with a friendly wait message.
+  - Environment-controlled cookie security: reads `BIZINTEL_COOKIE_SECURE` (`true`/`false`) for HTTPS production deployments.
+  - Startup safety check: FastAPI startup aborts with a descriptive error if `BIZINTEL_SESSION_SECRET` is missing or still set to the insecure placeholder.
+  - Cleaned developer paths in `README.md` and marked preview marketing metrics as `(Example)` on the landing page.
+  - Model schema update: widened `User.password_hash` to `String(255)`.
+  - **Test Score: 194 tests, all passing**
 
 ---
 

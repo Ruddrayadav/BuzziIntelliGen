@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.deps import validate_session_secret
 from api.routes import analytics, ask, auth, dashboard, upload
 from db.database import init_db
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    validate_session_secret()
     init_db()
     yield
 

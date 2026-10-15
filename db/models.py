@@ -54,7 +54,7 @@ class User(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(50), unique=True, nullable=False, index=True)
-    password_hash = Column(String(128), nullable=False)
+    password_hash = Column(String(255), nullable=False)
     salt = Column(String(32), nullable=False)
     
     # The unique identifier used across all data tables for this owner
