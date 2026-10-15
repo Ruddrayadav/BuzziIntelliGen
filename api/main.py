@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.deps import validate_session_secret
-from api.routes import analytics, ask, auth, dashboard, upload
+from api.routes import analytics, ask, auth, dashboard, reports, upload
 from db.database import init_db
 
 
@@ -31,11 +31,12 @@ app = FastAPI(title="BizIntel API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
 
 
 @app.exception_handler(HTTPException)
@@ -80,3 +81,5 @@ app.include_router(upload.router)
 app.include_router(dashboard.router)
 app.include_router(analytics.router)
 app.include_router(ask.router)
+app.include_router(reports.router)
+

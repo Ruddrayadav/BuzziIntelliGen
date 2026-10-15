@@ -332,8 +332,30 @@ export const api = {
       `/api/upload/history/${uploadId}`,
       { method: "DELETE" }
     ),
+  downloadMonthlyPdf: async (month?: string): Promise<void> => {
+    const params = new URLSearchParams();
+    if (month) params.set("month", month);
+    const q = params.toString();
+    const url = `${import.meta.env.VITE_API_URL ?? ""}/api/reports/monthly-pdf${q ? `?${q}` : ""}`;
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const msg = body?.message ?? body?.detail ?? "Failed to generate PDF report.";
+      throw new ApiError(msg, response.status);
+    }
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `bizintel-report-${month || "latest"}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+  },
   ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
+
 
 function monthsQuery(currentMonth?: string, priorMonth?: string) {
   const params = new URLSearchParams();

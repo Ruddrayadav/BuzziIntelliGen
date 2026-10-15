@@ -636,6 +636,65 @@ def test_upload_history_audit_and_undo_endpoints():
         assert del_again.status_code == 404
 
 
+def test_monthly_pdf_report_api_endpoint():
+    # 1. Unauthenticated request returns 401
+    with TestClient(app) as unauth_client:
+        res = unauth_client.get("/api/reports/monthly-pdf")
+        assert res.status_code == 401
+
+    # 2. Authenticated user with no data gets 400
+    with TestClient(app) as client:
+        _register(client, "api_pdf_user", "PDF Cafe")
+
+        # Invalid month format returns 422
+        bad_month = client.get("/api/reports/monthly-pdf?month=2024-99")
+        assert bad_month.status_code == 422
+
+        # Valid month but no transactions for that month returns 400
+        no_data_month = client.get("/api/reports/monthly-pdf?month=2024-01")
+        assert no_data_month.status_code == 400
+        assert "no financial transactions recorded" in no_data_month.json()["message"].lower()
+
+        # Omitted month with no records at all returns 400
+        no_data_user = client.get("/api/reports/monthly-pdf")
+        assert no_data_user.status_code == 400
+        assert "no sales or expense records found" in no_data_user.json()["message"].lower()
+
+
+        # 3. Upload sample sales
+        sales_file = _sample_sales_file()
+        valid_mapping = {
+            "order_id": "order_id",
+            "date": "date",
+            "item_name": "product",
+            "category": "category",
+            "qty": "quantity",
+            "unit_price": "unit_price",
+            "total": "revenue",
+        }
+        upload_res = client.post(
+            "/api/upload/commit",
+            files={"file": ("sales.csv", sales_file, "text/csv")},
+            data={"file_type": "sales", "mapping": json.dumps(valid_mapping)},
+        )
+        assert upload_res.status_code == 200
+
+        # 4. Generate report with explicit month
+        pdf_res = client.get("/api/reports/monthly-pdf?month=2024-01")
+        assert pdf_res.status_code == 200
+        assert pdf_res.headers["content-type"] == "application/pdf"
+        assert "bizintel-executive-report-2024-01.pdf" in pdf_res.headers["content-disposition"]
+        assert pdf_res.content.startswith(b"%PDF-")
+        assert b"%%EOF" in pdf_res.content
+
+        # 5. Generate report without month (auto-resolves latest month in data)
+        pdf_latest = client.get("/api/reports/monthly-pdf")
+        assert pdf_latest.status_code == 200
+        assert pdf_latest.headers["content-type"] == "application/pdf"
+        assert pdf_latest.content.startswith(b"%PDF-")
+
+
+
 
 
 

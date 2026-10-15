@@ -10,6 +10,7 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  FileText,
   Info,
   Layers,
   LoaderCircle,
@@ -76,6 +77,8 @@ export function DashboardPage() {
   const [granularity, setGranularity] = useState<Granularity>("daily");
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   const dashboard = useQuery({
     queryKey: ["dashboard", startDate, endDate],
@@ -89,6 +92,22 @@ export function DashboardPage() {
   if (dashboard.isError) return <PageError error={dashboard.error} retry={() => void dashboard.refetch()} />;
   const data = dashboard.data;
   const isEmpty = data.revenue_trend.length === 0 && data.expense_breakdown.length === 0;
+
+  const handleExportPdf = async () => {
+    setIsExportingPdf(true);
+    setPdfError(null);
+    try {
+      let targetMonth: string | undefined = undefined;
+      if (startDate && startDate.length >= 7) {
+        targetMonth = startDate.slice(0, 7);
+      }
+      await api.downloadMonthlyPdf(targetMonth);
+    } catch (err) {
+      setPdfError(err instanceof Error ? err.message : "Failed to download PDF report");
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
 
   const handleAttentionNavigate = (targetTab: string) => {
     const mappedTab: Tab =
@@ -111,44 +130,77 @@ export function DashboardPage() {
           <p className="mt-2 text-muted">The numbers below come directly from the files you imported.</p>
         </div>
 
-        {/* Date Range Filter */}
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-surface p-2 text-xs">
-          <Calendar size={14} className="text-muted ml-1" />
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="filter-start" className="text-muted">From</label>
-            <input
-              id="filter-start"
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="rounded-lg border bg-background px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-            />
+        {/* Action Controls: Date Range Filter & PDF Export Button */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-surface p-2 text-xs">
+            <Calendar size={14} className="text-muted ml-1" />
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="filter-start" className="text-muted">From</label>
+              <input
+                id="filter-start"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="rounded-lg border bg-background px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="filter-end" className="text-muted">To</label>
+              <input
+                id="filter-end"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="rounded-lg border bg-background px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+              />
+            </div>
+            {(startDate || endDate) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setStartDate("");
+                  setEndDate("");
+                }}
+                className="h-7 px-2 text-xs text-muted hover:text-ink"
+              >
+                <X size={13} className="mr-1" /> Reset
+              </Button>
+            )}
           </div>
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="filter-end" className="text-muted">To</label>
-            <input
-              id="filter-end"
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="rounded-lg border bg-background px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-            />
-          </div>
-          {(startDate || endDate) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setStartDate("");
-                setEndDate("");
-              }}
-              className="h-7 px-2 text-xs text-muted hover:text-ink"
-            >
-              <X size={13} className="mr-1" /> Reset
-            </Button>
-          )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportPdf}
+            disabled={isExportingPdf || isEmpty}
+            className="h-10 gap-1.5 rounded-xl border bg-surface px-3 text-xs font-semibold hover:bg-surface-hover"
+            title="Download executive monthly PDF report"
+          >
+            {isExportingPdf ? (
+              <>
+                <LoaderCircle size={14} className="animate-spin text-brand" />
+                <span>Generating PDF...</span>
+              </>
+            ) : (
+              <>
+                <FileText size={14} className="text-brand" />
+                <span>Export Report (PDF)</span>
+              </>
+            )}
+          </Button>
         </div>
       </div>
+
+      {pdfError && (
+        <div className="mt-3 flex items-center justify-between rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+          <span>{pdfError}</span>
+          <button onClick={() => setPdfError(null)} className="text-rose-600 hover:text-rose-800">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
 
       {/* "What Needs Your Attention" Panel */}
       {data.attention_items && data.attention_items.length > 0 && !isEmpty && (

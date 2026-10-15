@@ -214,6 +214,20 @@
     - "Undo Import" confirmation modal with danger warning and 1-click rollback, instantly updating the list.
     - Added "History" link to main navigation shell and "View Import History" shortcut button on Upload page.
   - **Test Score: 224 tests, all passing in <5s**
+- **Step 3.2 — Monthly Report Export (Executive PDF)**:
+  - Library Selection (`ReportLab`): Chosen for zero external C-dependencies or OS binaries (unlike WeasyPrint/wkhtmltopdf), pure-Python portability, rock-solid table layout, and standard wheel deployment across all operating systems.
+  - Report Engine (`services/report_service.py`):
+    - Generates multi-section executive monthly PDF reports entirely in Python/SQL (Principle 1 & 2).
+    - Sections include: Header Banner with business name and target month, Code-Built Executive Takeaway Callout, Core Financial Performance Table (Revenue, Expenses, Net Profit, Margin %, Orders, Units, AOV, MoM deltas), Decision Support & Operational Attention Items, Top 5 Revenue-Generating Catalog Items, Operating Expense Breakdown by Category, and Revenue Target Pacing.
+    - Uses two-pass `NumberedCanvas` to calculate total pages and render running confidential footers with page numbers.
+  - API Integration (`api/routes/reports.py`):
+    - `GET /api/reports/monthly-pdf?month=YYYY-MM`: streams PDF bytes with `application/pdf` media type, `Content-Disposition: attachment`, and strict tenant isolation.
+    - Auto-resolves the latest month in data when month is omitted; validates `YYYY-MM` format with regex.
+  - Frontend Integration:
+    - Added `api.downloadMonthlyPdf()` method in `frontend/src/lib/api.ts` with error handling and automatic blob download.
+    - Integrated "Export Report (PDF)" button in the main Dashboard header next to date filters with loading spinner and error alerts.
+  - **Test Score: 230 tests, all passing in <5s**
+
 
 
 ---

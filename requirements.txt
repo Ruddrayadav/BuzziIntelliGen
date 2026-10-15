@@ -45,3 +45,7 @@ pytest-cov>=5.0.0           # Coverage reports
 
 # ── Utilities ────────────────────────────────────────────────
 python-dateutil>=2.9.0      # Robust date parsing for messy date strings
+
+# ── Reporting ────────────────────────────────────────────────
+reportlab>=4.0.0            # PDF generation for monthly executive intelligence reports
+
