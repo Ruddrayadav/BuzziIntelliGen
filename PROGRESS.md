@@ -191,6 +191,12 @@
   - API Endpoints: exposed `/api/dashboard/day-of-week` and `/api/dashboard/slow-movers?limit=10`, and integrated both directly into `DashboardData` from `/api/dashboard`.
   - Frontend UI: added `DayOfWeekCard` with headline comparison callouts, Recharts bar chart highlighting the peak day in brand blue, and collapsible detail data table; added `SlowMoversCard` with status badges, sales velocity, recency counter, and owner-friendly recommendations.
   - **Test Score: 215 tests, all passing in <4s**
+- **Step 2.3 — Monthly Revenue Target & Real-Time Pacing**:
+  - Model & Migration: added `RevenueTarget` in `db/models.py` with `(tenant_id, month)` unique constraint and index, transparently migrated via `init_db()`.
+  - Target Service (`services/target_service.py`): calculates target progress, linear pacing comparison based on days elapsed relative to tenant data anchor date, month-end projected revenue, daily needed run rate, and code-built pacing summary headlines (Principle 1 & 2).
+  - API Endpoints: implemented `GET /api/dashboard/target`, `POST /api/dashboard/target`, and `DELETE /api/dashboard/target`, with embedded `target_pacing` inside `/api/dashboard`.
+  - Frontend UI: created `TargetPacingCard` positioned directly below the core KPI grid with visual progress bar, expected-pace vertical marker, ahead/behind/on-track status badges, 4-stat metrics grid, and inline modal/form to set or change targets.
+  - **Test Score: 220 tests, all passing in <4s**
 
 ---
 

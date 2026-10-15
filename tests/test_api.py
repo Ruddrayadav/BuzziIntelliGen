@@ -486,6 +486,7 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         assert "attention_items" in data
         assert "day_of_week_insight" in data
         assert "slow_movers" in data
+        assert "target_pacing" in data
         assert isinstance(data["attention_items"], list)
         assert data["total_transactions"] > 0
         assert data["total_units_sold"] > 0
@@ -511,6 +512,29 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         assert isinstance(sm_data, list)
         assert len(sm_data) <= 5
 
+        # Query target endpoints (Set, Get, Delete)
+        set_target_res = client.post(
+            "/api/dashboard/target",
+            json={"month": "2024-01", "target_amount": 50000.0},
+        )
+        assert set_target_res.status_code == 200
+        target_body = set_target_res.json()
+        assert target_body["has_target"] is True
+        assert target_body["target_amount"] == 50000.0
+
+        get_target_res = client.get("/api/dashboard/target?month=2024-01")
+        assert get_target_res.status_code == 200
+        assert get_target_res.json()["target_amount"] == 50000.0
+
+        # Invalid target rejected
+        bad_target = client.post("/api/dashboard/target", json={"month": "2024-01", "target_amount": -10.0})
+        assert bad_target.status_code == 422
+
+        # Delete target
+        del_target = client.delete("/api/dashboard/target?month=2024-01")
+        assert del_target.status_code == 200
+        assert del_target.json()["deleted"] is True
+
         # Query with date filter
         filtered_res = client.get("/api/dashboard?start_date=2024-01-01&end_date=2024-01-02")
         assert filtered_res.status_code == 200
@@ -524,6 +548,7 @@ def test_dashboard_endpoint_supports_date_filters_and_new_fields():
         assert len(trend_data) > 0
         assert "revenue" in trend_data[0]
         assert "expenses" in trend_data[0]
+
 
 
 

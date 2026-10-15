@@ -33,6 +33,7 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     Index,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -272,3 +273,31 @@ class Expenses(Base):
             f"<Expenses id={self.id} tenant={self.tenant_id} "
             f"date={self.date} category={self.category!r} amount={self.amount}>"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Revenue Targets (Step 2.3)
+# ─────────────────────────────────────────────────────────────────────────────
+class RevenueTarget(Base):
+    """
+    Stores monthly revenue targets set by the business owner.
+    One target per tenant per month (YYYY-MM).
+    """
+
+    __tablename__ = "revenue_targets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
+    month = Column(String(7), nullable=False)  # "YYYY-MM"
+    target_amount = Column(Float, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "month", name="uq_revenue_target_tenant_month"),
+        Index("ix_revenue_target_tenant_month", "tenant_id", "month"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<RevenueTarget tenant={self.tenant_id} month={self.month} target={self.target_amount}>"
+

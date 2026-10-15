@@ -1,9 +1,15 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from api.deps import SessionUser, require_session
 from api.serializers import to_jsonable
 from services.dashboard_service import get_dashboard_data, get_revenue_trend
+
+
+class SetTargetRequest(BaseModel):
+    month: str = Field(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="Target month in YYYY-MM format")
+    target_amount: float = Field(..., gt=0, description="Monthly revenue target amount")
 
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -64,4 +70,33 @@ def dashboard_slow_movers(
     return to_jsonable(get_slow_movers(user.tenant_id, start_date=start_date, end_date=end_date, limit=limit))
 
 
+@router.get("/dashboard/target")
+def get_target(
+    month: Optional[str] = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+    user: SessionUser = Depends(require_session),
+):
+    from services.target_service import get_target_pacing
+    return to_jsonable(get_target_pacing(user.tenant_id, month=month))
 
+
+@router.post("/dashboard/target")
+def set_target(
+    payload: SetTargetRequest,
+    user: SessionUser = Depends(require_session),
+):
+    from services.target_service import set_monthly_target
+    try:
+        result = set_monthly_target(user.tenant_id, payload.month, payload.target_amount)
+        return to_jsonable(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.delete("/dashboard/target")
+def delete_target(
+    month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+    user: SessionUser = Depends(require_session),
+):
+    from services.target_service import delete_monthly_target
+    deleted = delete_monthly_target(user.tenant_id, month)
+    return {"deleted": deleted, "month": month}

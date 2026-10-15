@@ -22,6 +22,7 @@ from sqlalchemy import func
 from db.database import get_db
 from db.models import Sales, Expenses
 from services.attention_service import get_attention_items
+from services.target_service import get_target_pacing
 
 
 @dataclass
@@ -51,6 +52,7 @@ class DashboardData:
     attention_items: list[dict[str, Any]] = field(default_factory=list)
     day_of_week_insight: Optional[dict[str, Any]] = None
     slow_movers: list[dict[str, Any]] = field(default_factory=list)
+    target_pacing: Optional[dict[str, Any]] = None
 
 
 def _parse_filter_date(d_str: Optional[str]):
@@ -283,6 +285,7 @@ def get_dashboard_data(
     attention_items = get_attention_items(tenant_id)
     dow_insight = get_day_of_week_insights(tenant_id, start_date=start_date, end_date=end_date)
     slow_movers = get_slow_movers(tenant_id, start_date=start_date, end_date=end_date)
+    target_pacing = get_target_pacing(tenant_id)
 
     return DashboardData(
         total_revenue=float(revenue),
@@ -302,6 +305,7 @@ def get_dashboard_data(
         attention_items=attention_items,
         day_of_week_insight=dow_insight,
         slow_movers=slow_movers,
+        target_pacing=target_pacing,
     )
 
 

@@ -83,6 +83,25 @@ export type SlowMoverItem = {
   recommendation: string;
 };
 
+export type TargetPacing = {
+  has_target: boolean;
+  month: string;
+  month_label: string;
+  target_amount: number;
+  current_revenue: number;
+  progress_pct: number;
+  days_in_month: number;
+  days_elapsed: number;
+  days_remaining: number;
+  expected_pace_amount: number;
+  pace_difference: number;
+  pace_pct: number;
+  pace_status: "achieved" | "ahead" | "on_track" | "behind" | "none";
+  projected_revenue: number;
+  daily_needed_remaining: number;
+  headline: string;
+};
+
 export type DashboardData = {
   total_revenue: number;
   total_expenses: number;
@@ -101,6 +120,7 @@ export type DashboardData = {
   attention_items?: AttentionItem[];
   day_of_week_insight?: DayOfWeekInsight | null;
   slow_movers?: SlowMoverItem[];
+  target_pacing?: TargetPacing | null;
 };
 
 export type PeriodSummary = {
@@ -265,6 +285,23 @@ export const api = {
     if (startDate) params.set("start_date", startDate);
     if (endDate) params.set("end_date", endDate);
     return request<SlowMoverItem[]>(`/api/dashboard/slow-movers?${params.toString()}`);
+  },
+  getTarget: (month?: string) => {
+    const params = new URLSearchParams();
+    if (month) params.set("month", month);
+    const q = params.toString();
+    return request<TargetPacing | null>(`/api/dashboard/target${q ? `?${q}` : ""}`);
+  },
+  setTarget: (month: string, target_amount: number) =>
+    request<TargetPacing>("/api/dashboard/target", {
+      method: "POST",
+      body: JSON.stringify({ month, target_amount }),
+    }),
+  deleteTarget: (month: string) => {
+    const params = new URLSearchParams({ month });
+    return request<{ deleted: boolean; month: string }>(`/api/dashboard/target?${params.toString()}`, {
+      method: "DELETE",
+    });
   },
   ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
