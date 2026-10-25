@@ -23,7 +23,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 from dateutil import parser as dateutil_parser
@@ -212,6 +212,127 @@ def _normalize_text(value, title_case: bool = True) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Category Normalisation (Synonyms & Plurals)
+# ─────────────────────────────────────────────────────────────────────────────
+CATEGORY_SYNONYMS = {
+    # Raw Material variants
+    "raw material": "Raw Material",
+    "raw materials": "Raw Material",
+    "material": "Raw Material",
+    "materials": "Raw Material",
+    "ingredient": "Raw Material",
+    "ingredients": "Raw Material",
+    "raw food": "Raw Material",
+
+    # Rent variants
+    "rent": "Rent",
+    "rents": "Rent",
+    "office rent": "Rent",
+    "shop rent": "Rent",
+    "building rent": "Rent",
+
+    # Salaries / Payroll
+    "salary": "Salaries",
+    "salaries": "Salaries",
+    "payroll": "Salaries",
+    "wage": "Salaries",
+    "wages": "Salaries",
+    "staff salary": "Salaries",
+    "employee salary": "Salaries",
+
+    # Utilities
+    "utility": "Utilities",
+    "utilities": "Utilities",
+    "electricity": "Utilities",
+    "water": "Utilities",
+    "power": "Utilities",
+    "internet": "Utilities",
+    "wifi": "Utilities",
+    "electric bill": "Utilities",
+
+    # Marketing
+    "marketing": "Marketing",
+    "advertising": "Marketing",
+    "advertisement": "Marketing",
+    "ads": "Marketing",
+    "promotions": "Marketing",
+    "promotion": "Marketing",
+
+    # Maintenance
+    "maintenance": "Maintenance",
+    "repair": "Maintenance",
+    "repairs": "Maintenance",
+    "upkeep": "Maintenance",
+
+    # Supplies
+    "supply": "Supplies",
+    "supplies": "Supplies",
+    "office supplies": "Supplies",
+    "store supplies": "Supplies",
+
+    # Logistics / Transport
+    "transport": "Transport",
+    "transportation": "Transport",
+    "travel": "Transport",
+    "logistics": "Transport",
+    "delivery": "Transport",
+    "shipping": "Transport",
+
+    # Taxes
+    "tax": "Taxes",
+    "taxes": "Taxes",
+    "gst": "Taxes",
+    "vat": "Taxes",
+
+    # Insurance
+    "insurance": "Insurance",
+
+    # Miscellaneous
+    "misc": "Miscellaneous",
+    "miscellaneous": "Miscellaneous",
+    "other": "Miscellaneous",
+    "others": "Miscellaneous",
+    "general": "Miscellaneous",
+
+    # Cash expense
+    "cash expense": "Cash Expense",
+    "cash expenses": "Cash Expense",
+}
+
+
+def normalize_category(val: Any) -> str:
+    """
+    Normalise expense and cash-book categories:
+    - trim and collapse spaces
+    - case-insensitive
+    - simple plural handling (e.g. 'Raw Materials' -> 'Raw Material')
+    - small synonym map
+    Defaults missing or empty to 'Uncategorised'.
+    """
+    if pd.isna(val) or val is None:
+        return "Uncategorised"
+    s = " ".join(str(val).strip().split())
+    if not s:
+        return "Uncategorised"
+
+    s_lower = s.lower()
+    if s_lower in CATEGORY_SYNONYMS:
+        return CATEGORY_SYNONYMS[s_lower]
+
+    # Simple plural handling
+    if s_lower.endswith("s") and not s_lower.endswith("ss"):
+        cand = s_lower[:-1]
+        if cand in CATEGORY_SYNONYMS:
+            return CATEGORY_SYNONYMS[cand]
+        words = s.split()
+        if len(words) > 0 and words[-1].lower().endswith("s") and not words[-1].lower().endswith("ss"):
+            words[-1] = words[-1][:-1]
+        return " ".join(words).title()
+
+    return s.title()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sales cleaning pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 def clean_sales(df: pd.DataFrame) -> CleaningResult:
@@ -364,11 +485,11 @@ def clean_expenses(df: pd.DataFrame) -> CleaningResult:
     df["amount"] = df["amount"].apply(_parse_money)
     df["date"] = df["date"].apply(_parse_date)
 
-    # Normalize text
+    # Normalize text and categories
     if "category" in df.columns:
-        df["category"] = df["category"].apply(lambda v: _normalize_text(v, title_case=True))
+        df["category"] = df["category"].apply(normalize_category)
     else:
-        df["category"] = "Uncategorized"
+        df["category"] = "Uncategorised"
 
     if "description" in df.columns:
         df["description"] = df["description"].apply(lambda v: _normalize_text(v, title_case=False))
@@ -376,7 +497,7 @@ def clean_expenses(df: pd.DataFrame) -> CleaningResult:
         df["description"] = None
 
     # Fill missing category
-    df["category"] = df["category"].fillna("Uncategorized")
+    df["category"] = df["category"].fillna("Uncategorised")
 
     # Compute raw revenue before dropping
     raw_revenue = float(df["amount"].fillna(0).sum())

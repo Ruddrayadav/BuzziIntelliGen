@@ -41,7 +41,7 @@ from sqlalchemy import func
 from config import settings
 from db.database import get_db, init_db
 from db.models import Expenses, Sales, UploadLog, RejectedRow
-from services.cleaning_service import CleaningResult, clean_dataframe, _parse_money
+from services.cleaning_service import CleaningResult, clean_dataframe, _parse_money, normalize_category
 from services.mapping_service import (
     ColumnMapping,
     apply_mapping,
@@ -606,7 +606,7 @@ def _build_expense_rows(
                 tenant_id=tenant_id,
                 upload_id=upload_id,
                 date=row["date"],
-                category=row["category"],
+                category=normalize_category(row["category"]),
                 description=_nan_to_none(row.get("description")),
                 amount=float(row["amount"]),
             )
