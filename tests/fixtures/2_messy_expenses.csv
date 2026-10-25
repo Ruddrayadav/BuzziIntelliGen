@@ -1,0 +1,10 @@
+Date,Category,Description,Amount
+2024-03-01,Rent,March rent,25000
+2024-03-02,Utilities,Electricity,3200
+2024-03-03,Salaries,Chef,18000
+2024-03-04,Raw Material,Milk,4200
+2024-03-05,Marketing,Flyers,1500
+,Rent,no date,5000
+2024-03-06,Utilities,bad amount,xyz
+2024-03-06,Salaries,negative,-4000
+2024-03-07,,no category,900

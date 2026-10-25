@@ -1,0 +1,14 @@
+Date,Item,Quantity,Revenue
+2024-03-01,Latte,2,300
+2024-03-01,Espresso,1,120
+2024-03-02,Sandwich,3,450
+2024-03-02,Latte,1,150
+2024-03-03,Cake,1,200
+2024-03-03,Espresso,2,240
+2024-03-04,Sandwich,2,300
+2024-03-04,Latte,3,450
+,Latte,1,150
+2024-03-05,Cake,1,abc
+2024-03-05,Latte,-2,300
+2024-03-05,,1,100
+not-a-date,Cake,1,200
