@@ -14,7 +14,8 @@ PRINCIPLE 1 & 2:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from datetime import date, datetime
+from typing import Any, Optional, Tuple
 import numpy as np
 import pandas as pd
 from sqlalchemy import func
@@ -55,13 +56,34 @@ class DashboardData:
     target_pacing: Optional[dict[str, Any]] = None
 
 
-def _parse_filter_date(d_str: Optional[str]):
+def _parse_filter_date(d_str: Optional[str], param_name: str = "date") -> Optional[date]:
     if not d_str:
         return None
-    try:
-        return pd.to_datetime(d_str.strip()).date()
-    except Exception:
+    cleaned = str(d_str).strip()
+    if not cleaned:
         return None
+    try:
+        return datetime.strptime(cleaned, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid {param_name} '{d_str}'. Must be a valid date in YYYY-MM-DD format.")
+
+
+def validate_date_range(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Tuple[Optional[date], Optional[date]]:
+    """
+    Validate start_date and end_date.
+    Raises ValueError with a clear message if date string is invalid or start_date > end_date.
+    """
+    start_dt = _parse_filter_date(start_date, "start_date")
+    end_dt = _parse_filter_date(end_date, "end_date")
+
+    if start_dt and end_dt and start_dt > end_dt:
+        raise ValueError(
+            f"Invalid date range: start_date ({start_date}) cannot be after end_date ({end_date})."
+        )
+    return start_dt, end_dt
 
 
 def get_dashboard_data(
@@ -73,8 +95,7 @@ def get_dashboard_data(
     Fetch and calculate all dashboard metrics for a specific tenant,
     optionally filtered by start_date and end_date (YYYY-MM-DD).
     """
-    start_dt = _parse_filter_date(start_date)
-    end_dt = _parse_filter_date(end_date)
+    start_dt, end_dt = validate_date_range(start_date, end_date)
 
     with get_db() as db:
         # ── 1. Calculate KPIs ────────────────────────────────────────────────
@@ -324,8 +345,7 @@ def get_revenue_trend(
     if norm_granularity not in ("daily", "weekly", "monthly"):
         raise ValueError(f"Unsupported granularity: {granularity}. Choose 'daily', 'weekly', or 'monthly'.")
 
-    start_dt = _parse_filter_date(start_date)
-    end_dt = _parse_filter_date(end_date)
+    start_dt, end_dt = validate_date_range(start_date, end_date)
 
     with get_db() as db:
         s_query = db.query(Sales.date, Sales.revenue).filter(Sales.tenant_id == tenant_id)
@@ -436,8 +456,7 @@ def get_day_of_week_insights(
     Calculate sales performance by day of the week (Monday through Sunday),
     providing average daily revenue, transaction counts, and code-built comparison headlines.
     """
-    start_dt = _parse_filter_date(start_date)
-    end_dt = _parse_filter_date(end_date)
+    start_dt, end_dt = validate_date_range(start_date, end_date)
 
     with get_db() as db:
         q = db.query(
@@ -546,8 +565,7 @@ def get_slow_movers(
     Identify slow-moving products by calculating unit sales velocity,
     days since last transaction (relative to tenant anchor date), and actionable recommendations.
     """
-    start_dt = _parse_filter_date(start_date)
-    end_dt = _parse_filter_date(end_date)
+    start_dt, end_dt = validate_date_range(start_date, end_date)
 
     with get_db() as db:
         max_d = db.query(func.max(Sales.date)).filter(Sales.tenant_id == tenant_id).scalar()

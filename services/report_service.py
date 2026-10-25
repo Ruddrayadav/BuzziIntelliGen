@@ -81,11 +81,26 @@ def _get_tenant_business_name(tenant_id: str) -> str:
     return tenant_id.replace("_", " ").title()
 
 
-def _resolve_report_month(tenant_id: str, requested_month: Optional[str]) -> Tuple[str, str, str, str]:
+def _resolve_report_month(
+    tenant_id: str,
+    requested_month: Optional[str],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Tuple[str, str, str, str]:
     """
-    Validates or resolves the target month.
+    Validates or resolves the target month / date range.
     Returns: (month_str 'YYYY-MM', human_label 'Month YYYY', start_date 'YYYY-MM-DD', end_date 'YYYY-MM-DD').
     """
+    from services.dashboard_service import validate_date_range
+
+    if start_date is not None or end_date is not None:
+        start_dt, end_dt = validate_date_range(start_date, end_date)
+        s_str = start_dt.isoformat() if start_dt else ""
+        e_str = end_dt.isoformat() if end_dt else ""
+        period_id = f"{s_str}_{e_str}"
+        human_label = f"{s_str or 'Earliest'} to {e_str or 'Latest'}"
+        return period_id, human_label, s_str, e_str
+
     if requested_month:
         month_str = requested_month.strip()
         if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month_str):
@@ -152,14 +167,21 @@ class NumberedCanvas(canvas.Canvas):
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Main PDF Generation Engine
 # ─────────────────────────────────────────────────────────────────────────────
-def generate_monthly_pdf_report(tenant_id: str, month: Optional[str] = None) -> bytes:
+def generate_monthly_pdf_report(
+    tenant_id: str,
+    month: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> bytes:
     """
     Generates a complete, multi-section monthly executive intelligence PDF report
-    for the specified tenant and reporting month.
+    for the specified tenant and reporting month or date range.
     Returns raw PDF bytes.
     """
     # 1. Resolve month & tenant details
-    month_str, month_label, start_date, end_date = _resolve_report_month(tenant_id, month)
+    month_str, month_label, start_date, end_date = _resolve_report_month(
+        tenant_id, month, start_date=start_date, end_date=end_date
+    )
     business_name = _get_tenant_business_name(tenant_id)
     generated_at = datetime.now().strftime("%B %d, %Y at %I:%M %p")
 

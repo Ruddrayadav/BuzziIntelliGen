@@ -20,6 +20,8 @@ def export_monthly_pdf(
         description="Target reporting month in YYYY-MM format. If omitted, uses latest month in records.",
         pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
     ),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     user: SessionUser = Depends(require_session),
 ):
     """
@@ -27,7 +29,12 @@ def export_monthly_pdf(
     for the authenticated tenant.
     """
     try:
-        pdf_bytes = generate_monthly_pdf_report(user.tenant_id, month=month)
+        pdf_bytes = generate_monthly_pdf_report(
+            user.tenant_id,
+            month=month,
+            start_date=start_date,
+            end_date=end_date,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 

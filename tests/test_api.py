@@ -755,6 +755,49 @@ def test_ask_ai_history_and_clear_endpoints():
         assert client_a.get("/api/ask/history").json() == []
 
 
+def test_date_filter_validation_endpoints():
+    """
+    Step 2 verification:
+    Invalid dates (start_date=not-a-date) and reversed ranges must return
+    HTTP 400 with a clear message, not silently return all data.
+    Applies to all dashboard endpoints and the PDF report.
+    """
+    with TestClient(app) as client:
+        _register(client, "date_val_user", "Date Cafe")
+
+        endpoints = [
+            "/api/dashboard",
+            "/api/dashboard/trend",
+            "/api/dashboard/day-of-week",
+            "/api/dashboard/slow-movers",
+        ]
+
+        for ep in endpoints:
+            # 1. Invalid start_date
+            res_bad_start = client.get(f"{ep}?start_date=not-a-date")
+            assert res_bad_start.status_code == 400, f"{ep} did not return 400 for bad start_date"
+            assert "Invalid start_date" in res_bad_start.json()["message"]
+
+            # 2. Invalid end_date
+            res_bad_end = client.get(f"{ep}?end_date=invalid-date")
+            assert res_bad_end.status_code == 400, f"{ep} did not return 400 for bad end_date"
+            assert "Invalid end_date" in res_bad_end.json()["message"]
+
+            # 3. Reversed date range
+            res_reversed = client.get(f"{ep}?start_date=2024-03-01&end_date=2024-01-01")
+            assert res_reversed.status_code == 400, f"{ep} did not return 400 for reversed date range"
+            assert "cannot be after end_date" in res_reversed.json()["message"]
+
+        # 4. PDF report validation
+        pdf_bad_start = client.get("/api/reports/monthly-pdf?start_date=not-a-date")
+        assert pdf_bad_start.status_code == 400
+        assert "Invalid start_date" in pdf_bad_start.json()["message"]
+
+        pdf_reversed = client.get("/api/reports/monthly-pdf?start_date=2024-05-01&end_date=2024-01-01")
+        assert pdf_reversed.status_code == 400
+        assert "cannot be after end_date" in pdf_reversed.json()["message"]
+
+
 
 
 

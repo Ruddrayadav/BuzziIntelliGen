@@ -21,7 +21,10 @@ def dashboard(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     user: SessionUser = Depends(require_session),
 ):
-    return to_jsonable(get_dashboard_data(user.tenant_id, start_date=start_date, end_date=end_date))
+    try:
+        return to_jsonable(get_dashboard_data(user.tenant_id, start_date=start_date, end_date=end_date))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.get("/dashboard/trend")
@@ -56,7 +59,10 @@ def dashboard_day_of_week(
     user: SessionUser = Depends(require_session),
 ):
     from services.dashboard_service import get_day_of_week_insights
-    return to_jsonable(get_day_of_week_insights(user.tenant_id, start_date=start_date, end_date=end_date))
+    try:
+        return to_jsonable(get_day_of_week_insights(user.tenant_id, start_date=start_date, end_date=end_date))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.get("/dashboard/slow-movers")
@@ -67,7 +73,10 @@ def dashboard_slow_movers(
     user: SessionUser = Depends(require_session),
 ):
     from services.dashboard_service import get_slow_movers
-    return to_jsonable(get_slow_movers(user.tenant_id, start_date=start_date, end_date=end_date, limit=limit))
+    try:
+        return to_jsonable(get_slow_movers(user.tenant_id, start_date=start_date, end_date=end_date, limit=limit))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.get("/dashboard/target")
