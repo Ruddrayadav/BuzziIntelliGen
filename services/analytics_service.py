@@ -22,6 +22,9 @@ from sqlalchemy import func
 
 from db.database import get_db
 from db.models import Sales, Expenses
+import re
+
+MONTH_REGEX = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,13 +53,13 @@ class PeriodComparison:
     
     # Deltas (Current - Prior)
     revenue_delta: float = 0.0
-    revenue_delta_pct: float = 0.0
+    revenue_delta_pct: Optional[float] = None
     expense_delta: float = 0.0
-    expense_delta_pct: float = 0.0
+    expense_delta_pct: Optional[float] = None
     profit_delta: float = 0.0
-    profit_delta_pct: float = 0.0
+    profit_delta_pct: Optional[float] = None
     aov_delta: float = 0.0
-    aov_delta_pct: float = 0.0
+    aov_delta_pct: Optional[float] = None
     margin_delta_pct: float = 0.0
     
     # Product & Expense Shifts
@@ -74,11 +77,12 @@ class Anomaly:
     actual_value: float
     expected_value: float
     deviation: float      # actual - expected
-    deviation_pct: float  # percentage above/below expected
-    z_score: float
-    anomaly_type: str     # "spike" or "drop"
-    severity: str         # "critical", "warning", "info"
-    description: str
+    deviation_pct: Optional[float] = None  # percentage above/below expected
+    z_score: float = 0.0
+    anomaly_type: str = "spike"     # "spike" or "drop"
+    severity: str = "info"         # "critical", "warning", "info"
+    description: str = ""
+    expense_details: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -98,7 +102,7 @@ class ProfitDiagnosis:
     prior_profit: float
     current_profit: float
     profit_change: float
-    profit_change_pct: float
+    profit_change_pct: Optional[float]
     is_profit_down: bool
     primary_driver: str
     revenue_impact: float
@@ -114,13 +118,53 @@ class ProfitDiagnosis:
 # 2. Helper Functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _calc_pct_change(current: float, prior: float) -> float:
-    """Safely calculate percentage change without ZeroDivisionError."""
-    if prior == 0.0:
-        if current == 0.0:
+def _calc_pct_change(current: Optional[float], prior: Optional[float]) -> Optional[float]:
+    """
+    Safely calculate percentage change.
+    Returns None when the previous value is 0 or missing (representing a new item).
+    """
+    if prior is None or pd.isna(prior):
+        return None
+    if current is None or pd.isna(current):
+        return None
+    prior_f = float(prior)
+    curr_f = float(current)
+    if prior_f == 0.0:
+        if curr_f == 0.0:
             return 0.0
-        return 100.0 if current > 0 else -100.0
-    return round(((current - prior) / abs(prior)) * 100.0, 2)
+        return None
+    return round(((curr_f - prior_f) / abs(prior_f)) * 100.0, 2)
+
+
+def get_month_data_availability(tenant_id: str) -> Dict[str, Dict[str, bool]]:
+    """
+    Returns a dictionary of month ('YYYY-MM') -> {"has_sales": bool, "has_expenses": bool, "has_both": bool}
+    for all months present in the tenant's data.
+    """
+    with get_db() as db:
+        sales_dates = db.query(Sales.date).filter(Sales.tenant_id == tenant_id).all()
+        exp_dates = db.query(Expenses.date).filter(Expenses.tenant_id == tenant_id).all()
+
+    sales_months = {d[0].strftime("%Y-%m") for d in sales_dates if d[0]}
+    exp_months = {d[0].strftime("%Y-%m") for d in exp_dates if d[0]}
+    all_months = sorted(list(sales_months.union(exp_months)))
+
+    return {
+        m: {
+            "has_sales": m in sales_months,
+            "has_expenses": m in exp_months,
+            "has_both": (m in sales_months and m in exp_months),
+        }
+        for m in all_months
+    }
+
+
+def get_complete_months(tenant_id: str) -> List[str]:
+    """
+    Returns sorted list of available months that have BOTH sales and expenses data.
+    """
+    avail = get_month_data_availability(tenant_id)
+    return [m for m, s in avail.items() if s["has_both"]]
 
 
 def get_available_months(tenant_id: str) -> List[str]:
@@ -128,16 +172,8 @@ def get_available_months(tenant_id: str) -> List[str]:
     Returns sorted list of available months in 'YYYY-MM' format for a tenant,
     combining both Sales and Expenses data.
     """
-    with get_db() as db:
-        sales_dates = db.query(Sales.date).filter(Sales.tenant_id == tenant_id).all()
-        exp_dates = db.query(Expenses.date).filter(Expenses.tenant_id == tenant_id).all()
-        
-    all_dates = [r[0] for r in sales_dates if r[0]] + [r[0] for r in exp_dates if r[0]]
-    if not all_dates:
-        return []
-    
-    unique_months = set(d.strftime("%Y-%m") for d in all_dates)
-    return sorted(list(unique_months))
+    avail = get_month_data_availability(tenant_id)
+    return list(avail.keys())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,22 +187,82 @@ def compare_periods(
 ) -> Optional[PeriodComparison]:
     """
     Compare business performance between two months (e.g. '2024-06' vs '2024-05').
-    If months are not specified, defaults to the two most recent available months.
+    If months are not specified, defaults to the two most recent complete months.
+    Guarantees that both periods have BOTH sales and expense data, or raises ValueError
+    clearly stating which month has only sales or only expenses.
     """
-    available_months = get_available_months(tenant_id)
-    if not available_months:
-        return None
-    
-    if len(available_months) < 2 and (not current_month or not prior_month):
-        # Only one month available: return comparison against zero baseline
-        current_month = available_months[0]
-        prior_month = None
+    # 1. Format validation
+    if current_month is not None and not MONTH_REGEX.match(current_month):
+        raise ValueError(f"Invalid month format: '{current_month}'. Must be YYYY-MM (e.g., '2024-05').")
+    if prior_month is not None and not MONTH_REGEX.match(prior_month):
+        raise ValueError(f"Invalid month format: '{prior_month}'. Must be YYYY-MM (e.g., '2024-04').")
 
-    if not current_month:
-        current_month = available_months[-1]
-    if prior_month is None and len(available_months) >= 2:
-        curr_idx = available_months.index(current_month) if current_month in available_months else len(available_months) - 1
-        prior_month = available_months[curr_idx - 1] if curr_idx > 0 else None
+    avail = get_month_data_availability(tenant_id)
+    if not avail:
+        return None
+
+    # Helper for clear plain-English explanation
+    def _check_both_or_raise(m: str, label: str):
+        if m not in avail:
+            raise ValueError(f"No financial records found for {label} month '{m}'.")
+        status = avail[m]
+        if not status["has_both"]:
+            if status["has_sales"] and not status["has_expenses"]:
+                raise ValueError(
+                    f"Month '{m}' only has sales data (no expenses recorded). "
+                    "Comparison requires both sales and expenses."
+                )
+            else:
+                raise ValueError(
+                    f"Month '{m}' only has expense data (no sales recorded). "
+                    "Comparison requires both sales and expenses."
+                )
+
+    # 2. If explicit months were provided, strictly validate both
+    if current_month is not None:
+        _check_both_or_raise(current_month, "current")
+
+    if prior_month is not None:
+        _check_both_or_raise(prior_month, "prior")
+
+    # 3. Auto-select complete months if not fully provided
+    complete_months = get_complete_months(tenant_id)
+
+    if not complete_months:
+        sales_only = [m for m, s in avail.items() if s["has_sales"] and not s["has_expenses"]]
+        exp_only = [m for m, s in avail.items() if s["has_expenses"] and not s["has_sales"]]
+        if sales_only and not exp_only:
+            raise ValueError(
+                f"Cannot compare periods: imported data for {', '.join(sales_only)} only has sales (no expenses recorded). "
+                "Comparison requires both sales and expenses."
+            )
+        elif exp_only and not sales_only:
+            raise ValueError(
+                f"Cannot compare periods: imported data for {', '.join(exp_only)} only has expenses (no sales recorded). "
+                "Comparison requires both sales and expenses."
+            )
+        else:
+            details = []
+            for m in sorted(avail.keys()):
+                s = avail[m]
+                if s["has_sales"] and not s["has_expenses"]:
+                    details.append(f"{m} has only sales")
+                elif s["has_expenses"] and not s["has_sales"]:
+                    details.append(f"{m} has only expenses")
+            raise ValueError(
+                f"Cannot compare periods: data is incomplete ({', '.join(details)}). "
+                "Comparison requires both sales and expenses."
+            )
+
+    if current_month is None:
+        current_month = complete_months[-1]
+
+    if prior_month is None:
+        if len(complete_months) >= 2:
+            curr_idx = complete_months.index(current_month) if current_month in complete_months else len(complete_months) - 1
+            prior_month = complete_months[curr_idx - 1] if curr_idx > 0 else None
+        else:
+            prior_month = None
 
     # Load tenant sales & expenses
     with get_db() as db:
@@ -294,6 +390,7 @@ def compare_periods(
     top_decliners = []
     if not product_shifts_df.empty:
         product_shifts_df = product_shifts_df.sort_values("delta", ascending=False)
+        product_shifts_df["delta_pct"] = product_shifts_df["delta_pct"].astype(object).where(product_shifts_df["delta_pct"].notnull(), None)
         top_gainers = product_shifts_df[product_shifts_df["delta"] > 0].head(5).to_dict("records")
         top_decliners = product_shifts_df[product_shifts_df["delta"] < 0].sort_values("delta", ascending=True).head(5).to_dict("records")
 
@@ -320,6 +417,7 @@ def compare_periods(
     expense_shifts_df = pd.DataFrame(e_shifts_list)
     if not expense_shifts_df.empty:
         expense_shifts_df = expense_shifts_df.sort_values("delta", ascending=False)
+        expense_shifts_df["delta_pct"] = expense_shifts_df["delta_pct"].astype(object).where(expense_shifts_df["delta_pct"].notnull(), None)
 
     return PeriodComparison(
         current=curr_summary,
@@ -357,7 +455,12 @@ def detect_anomalies(
         s_query = db.query(Sales.date, Sales.revenue).filter(Sales.tenant_id == tenant_id).statement
         sales_df = pd.read_sql(s_query, db.bind)
         
-        e_query = db.query(Expenses.date, Expenses.amount).filter(Expenses.tenant_id == tenant_id).statement
+        e_query = db.query(
+            Expenses.date,
+            Expenses.category,
+            Expenses.description,
+            Expenses.amount,
+        ).filter(Expenses.tenant_id == tenant_id).statement
         exp_df = pd.read_sql(e_query, db.bind)
 
     if sales_df.empty and exp_df.empty:
@@ -416,10 +519,11 @@ def detect_anomalies(
                 else:
                     severity = "info"
                     
+                dev_str = f"{dev_pct:+.1f}%" if dev_pct is not None else "new"
                 if anomaly_type == "spike":
-                    desc = f"Revenue surged to ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f})"
+                    desc = f"Revenue surged to ₹{actual:,.2f} ({dev_str} vs expected ₹{expected:,.2f})"
                 else:
-                    desc = f"Revenue plunged to ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f})"
+                    desc = f"Revenue plunged to ₹{actual:,.2f} ({dev_str} vs expected ₹{expected:,.2f})"
 
                 rev_anomalies.append(Anomaly(
                     date=row["date"],
@@ -431,7 +535,8 @@ def detect_anomalies(
                     z_score=round(z, 2),
                     anomaly_type=anomaly_type,
                     severity=severity,
-                    description=desc
+                    description=desc,
+                    expense_details=[],
                 ))
 
     # 2. Expense Anomalies
@@ -460,7 +565,32 @@ def detect_anomalies(
             if z >= sensitivity:
                 dev_pct = _calc_pct_change(actual, expected)
                 severity = "critical" if z >= 3.0 else ("warning" if z >= 2.0 else "info")
-                desc = f"Expense spike of ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f})"
+
+                # Extract individual expense records on that date
+                matching_items = exp_df[exp_df["date"] == row["date"]]
+                expense_items = []
+                top_item_desc = ""
+                if not matching_items.empty:
+                    for _, m_row in matching_items.iterrows():
+                        cat = str(m_row.get("category", "")).strip() or "General"
+                        raw_desc = str(m_row.get("description", "")).strip()
+                        desc_str = raw_desc if raw_desc and raw_desc.lower() != "nan" else ""
+                        amt = float(m_row.get("amount", 0.0))
+                        expense_items.append({
+                            "category": cat,
+                            "description": desc_str,
+                            "amount": round(amt, 2),
+                        })
+                    # Sort by amount descending
+                    expense_items.sort(key=lambda x: x["amount"], reverse=True)
+                    largest = expense_items[0]
+                    if largest["description"]:
+                        top_item_desc = f": {largest['description']} ({largest['category']} - ₹{largest['amount']:,.2f})"
+                    else:
+                        top_item_desc = f": {largest['category']} (₹{largest['amount']:,.2f})"
+
+                dev_str = f"{dev_pct:+.1f}%" if dev_pct is not None else "new"
+                desc = f"Expense spike of ₹{actual:,.2f} ({dev_str} vs expected ₹{expected:,.2f}){top_item_desc}"
                 
                 exp_anomalies.append(Anomaly(
                     date=row["date"],
@@ -472,7 +602,8 @@ def detect_anomalies(
                     z_score=round(z, 2),
                     anomaly_type="spike",
                     severity=severity,
-                    description=desc
+                    description=desc,
+                    expense_details=expense_items,
                 ))
 
     # Sort anomalies chronologically
@@ -500,6 +631,11 @@ def diagnose_profit_drop(
     Deconstructs why net profit changed between two periods into its
     root causal drivers (Revenue contraction vs Cost inflation vs Product mix).
     """
+    if current_month is not None and not MONTH_REGEX.match(current_month):
+        raise ValueError(f"Invalid month format: '{current_month}'. Must be YYYY-MM (e.g., '2024-05').")
+    if prior_month is not None and not MONTH_REGEX.match(prior_month):
+        raise ValueError(f"Invalid month format: '{prior_month}'. Must be YYYY-MM (e.g., '2024-04').")
+
     comp = compare_periods(tenant_id, current_month, prior_month)
     if not comp or comp.prior.period_label == "None":
         return None
@@ -564,23 +700,26 @@ def diagnose_profit_drop(
     key_insights: List[str] = []
     recommendations: List[str] = []
 
+    def _fmt_p(p: Optional[float]) -> str:
+        return "new" if p is None or pd.isna(p) else f"{float(p):+.1f}%"
+
     if is_down:
         key_insights.append(
-            f"Net Profit declined by ₹{abs(profit_change):,.2f} ({profit_change_pct:+.1f}%) from {comp.prior.period_label} to {comp.current.period_label}."
+            f"Net Profit declined by ₹{abs(profit_change):,.2f} ({_fmt_p(profit_change_pct)}) from {comp.prior.period_label} to {comp.current.period_label}."
         )
         if comp.revenue_delta < 0:
             key_insights.append(
-                f"Revenue drop contributed ₹{abs(comp.revenue_delta):,.2f} ({comp.revenue_delta_pct:+.1f}%) to the deficit."
+                f"Revenue drop contributed ₹{abs(comp.revenue_delta):,.2f} ({_fmt_p(comp.revenue_delta_pct)}) to the deficit."
             )
         if comp.expense_delta > 0:
             key_insights.append(
-                f"Expense increase added an extra ₹{comp.expense_delta:,.2f} (+{comp.expense_delta_pct:+.1f}%) to operational costs."
+                f"Expense increase added an extra ₹{comp.expense_delta:,.2f} ({_fmt_p(comp.expense_delta_pct)}) to operational costs."
             )
             
         if top_drags:
             top_p = top_drags[0]
             key_insights.append(
-                f"Major revenue drag: '{top_p['product']}' dropped by ₹{top_p['drop_amount']:,.2f} ({top_p['pct_change']:+.1f}%)."
+                f"Major revenue drag: '{top_p['product']}' dropped by ₹{top_p['drop_amount']:,.2f} ({_fmt_p(top_p['pct_change'])})."
             )
             recommendations.append(
                 f"Review inventory, customer demand, or promotional pricing for '{top_p['product']}' to recover sales."
@@ -589,7 +728,7 @@ def diagnose_profit_drop(
         if top_surges:
             top_e = top_surges[0]
             key_insights.append(
-                f"Highest cost spike: '{top_e['category']}' jumped by ₹{top_e['increase_amount']:,.2f} ({top_e['pct_change']:+.1f}%)."
+                f"Highest cost spike: '{top_e['category']}' jumped by ₹{top_e['increase_amount']:,.2f} ({_fmt_p(top_e['pct_change'])})."
             )
             recommendations.append(
                 f"Audit vendor invoices and recurring contracts for '{top_e['category']}' to trim unnecessary costs."
@@ -601,12 +740,12 @@ def diagnose_profit_drop(
             )
     else:
         key_insights.append(
-            f"Net Profit grew by ₹{profit_change:,.2f} ({profit_change_pct:+.1f}%) from {comp.prior.period_label} to {comp.current.period_label}."
+            f"Net Profit grew by ₹{profit_change:,.2f} ({_fmt_p(profit_change_pct)}) from {comp.prior.period_label} to {comp.current.period_label}."
         )
         if comp.revenue_delta > 0:
-            key_insights.append(f"Revenue expanded by ₹{comp.revenue_delta:,.2f} ({comp.revenue_delta_pct:+.1f}%).")
+            key_insights.append(f"Revenue expanded by ₹{comp.revenue_delta:,.2f} ({_fmt_p(comp.revenue_delta_pct)}).")
         if comp.expense_delta < 0:
-            key_insights.append(f"Operating expenses decreased by ₹{abs(comp.expense_delta):,.2f} ({comp.expense_delta_pct:+.1f}%).")
+            key_insights.append(f"Operating expenses decreased by ₹{abs(comp.expense_delta):,.2f} ({_fmt_p(comp.expense_delta_pct)}).")
         recommendations.append("Continue current marketing momentum and maintain cost controls on overhead.")
 
     # 5. Build Waterfall Chart Data

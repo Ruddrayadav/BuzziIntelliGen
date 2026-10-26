@@ -1,0 +1,5 @@
+Date,Item,Quantity,Revenue
+2024-03-01,"=HYPERLINK(""http://evil.test"",""click"")",1,100
+2024-03-01,+cmd|' /C calc'!A0,1,100
+2024-03-02,@SUM(1+1),1,100
+2024-03-02,Latte,1,100

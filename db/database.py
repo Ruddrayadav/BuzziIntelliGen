@@ -33,12 +33,15 @@ SWITCHING TO POSTGRESQL LATER:
 """
 
 from contextlib import contextmanager
+import logging
 from typing import Generator
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,6 +162,31 @@ def init_db() -> None:
     import db.models  # noqa: F401  (imported for its side effect of registration)
 
     Base.metadata.create_all(bind=engine)
+    _apply_migrations(engine)
+
+
+def _apply_migrations(bind_engine) -> None:
+    """
+    Apply safe, idempotent schema updates for SQLite without dropping existing tables or data.
+    """
+    try:
+        with bind_engine.connect() as conn:
+            table_check = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='upload_log';")
+            ).fetchone()
+            if table_check:
+                result = conn.execute(text("PRAGMA table_info(upload_log);")).fetchall()
+                col_names = [row[1] for row in result]
+                if "file_hash" not in col_names:
+                    conn.execute(text("ALTER TABLE upload_log ADD COLUMN file_hash VARCHAR(64);"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_upload_log_tenant_hash ON upload_log (tenant_id, file_hash);"))
+                    conn.commit()
+                if "rows_with_warnings" not in col_names:
+                    conn.execute(text("ALTER TABLE upload_log ADD COLUMN rows_with_warnings INTEGER DEFAULT 0;"))
+                    conn.commit()
+    except Exception as exc:
+        logger.warning("Database migration check encountered an issue: %s", exc)
+
 
 
 def get_engine():

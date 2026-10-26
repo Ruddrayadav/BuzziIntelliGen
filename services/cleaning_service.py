@@ -23,7 +23,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 from dateutil import parser as dateutil_parser
@@ -79,6 +79,7 @@ class CleaningResult:
     clean_revenue: float
     duplicates_removed: int
     invalid_removed: int
+    saved_with_warnings: int = 0
     rejected_rows: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -212,6 +213,140 @@ def _normalize_text(value, title_case: bool = True) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Category Normalisation (Synonyms & Plurals)
+# ─────────────────────────────────────────────────────────────────────────────
+CATEGORY_SYNONYMS = {
+    # Raw Material variants
+    "raw material": "Raw Material",
+    "raw materials": "Raw Material",
+    "material": "Raw Material",
+    "materials": "Raw Material",
+    "ingredient": "Raw Material",
+    "ingredients": "Raw Material",
+    "raw food": "Raw Material",
+
+    # Rent variants
+    "rent": "Rent",
+    "rents": "Rent",
+    "office rent": "Rent",
+    "shop rent": "Rent",
+    "building rent": "Rent",
+
+    # Salaries / Payroll
+    "salary": "Salaries",
+    "salaries": "Salaries",
+    "payroll": "Salaries",
+    "wage": "Salaries",
+    "wages": "Salaries",
+    "staff salary": "Salaries",
+    "employee salary": "Salaries",
+
+    # Utilities
+    "utility": "Utilities",
+    "utilities": "Utilities",
+    "electricity": "Utilities",
+    "water": "Utilities",
+    "power": "Utilities",
+    "internet": "Utilities",
+    "wifi": "Utilities",
+    "electric bill": "Utilities",
+
+    # Marketing
+    "marketing": "Marketing",
+    "advertising": "Marketing",
+    "advertisement": "Marketing",
+    "ads": "Marketing",
+    "promotions": "Marketing",
+    "promotion": "Marketing",
+
+    # Maintenance
+    "maintenance": "Maintenance",
+    "repair": "Maintenance",
+    "repairs": "Maintenance",
+    "upkeep": "Maintenance",
+
+    # Supplies
+    "supply": "Supplies",
+    "supplies": "Supplies",
+    "office supplies": "Supplies",
+    "store supplies": "Supplies",
+
+    # Logistics / Transport
+    "transport": "Transport",
+    "transportation": "Transport",
+    "travel": "Transport",
+    "logistics": "Transport",
+    "delivery": "Transport",
+    "shipping": "Transport",
+
+    # Taxes
+    "tax": "Taxes",
+    "taxes": "Taxes",
+    "gst": "Taxes",
+    "vat": "Taxes",
+
+    # Insurance
+    "insurance": "Insurance",
+
+    # Miscellaneous
+    "misc": "Miscellaneous",
+    "miscellaneous": "Miscellaneous",
+    "other": "Miscellaneous",
+    "others": "Miscellaneous",
+    "general": "Miscellaneous",
+
+    # Cash expense
+    "cash expense": "Cash Expense",
+    "cash expenses": "Cash Expense",
+}
+
+
+def normalize_category(val: Any) -> str:
+    """
+    Normalise expense and cash-book categories:
+    - trim and collapse spaces
+    - case-insensitive
+    - simple plural handling (e.g. 'Raw Materials' -> 'Raw Material')
+    - small synonym map
+    Defaults missing or empty to 'Uncategorised'.
+    """
+    if pd.isna(val) or val is None:
+        return "Uncategorised"
+    s = " ".join(str(val).strip().split())
+    if not s:
+        return "Uncategorised"
+
+    s_lower = s.lower()
+    if s_lower in CATEGORY_SYNONYMS:
+        return CATEGORY_SYNONYMS[s_lower]
+
+    # Simple plural handling
+    if s_lower.endswith("s") and not s_lower.endswith("ss"):
+        cand = s_lower[:-1]
+        if cand in CATEGORY_SYNONYMS:
+            return CATEGORY_SYNONYMS[cand]
+        words = s.split()
+        if len(words) > 0 and words[-1].lower().endswith("s") and not words[-1].lower().endswith("ss"):
+            words[-1] = words[-1][:-1]
+        return " ".join(words).title()
+
+    return s.title()
+
+
+def _format_raw_dict(row: pd.Series) -> dict[str, str]:
+    """Format raw row as dictionary of strings, keeping empty strings for missing/null values."""
+    out = {}
+    for k, v in row.items():
+        if pd.isna(v) or v is None or str(v).strip().lower() in ("nan", "none", "null"):
+            out[str(k)] = ""
+        elif isinstance(v, float) and v.is_integer():
+            out[str(k)] = str(int(v))
+        else:
+            out[str(k)] = str(v)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sales cleaning pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 def clean_sales(df: pd.DataFrame) -> CleaningResult:
@@ -219,115 +354,135 @@ def clean_sales(df: pd.DataFrame) -> CleaningResult:
     Clean a sales DataFrame that already has standard column names:
       date, order_id, product, category, quantity, unit_price, revenue
 
-    Steps (in order):
-      1. Work on a copy — never mutate the caller's DataFrame.
-      2. Apply _parse_money to revenue and unit_price.
-      3. Apply _parse_date to date.
-      4. Normalize product and category text.
-      5. Drop rows where revenue is missing/zero (they're useless for analysis).
-      6. Drop rows where date is missing (can't place them on a timeline).
-      7. Deduplicate on (date, product, revenue).
-      8. Reset index and return CleaningResult.
-
-    Args:
-        df: Raw DataFrame with standard sales column names.
-
-    Returns:
-        CleaningResult with the cleaned DataFrame and a report.
+    Validation rules:
+      - Reject rows with missing date (cell is empty) -> "Missing date"
+      - Reject rows with invalid date (unparseable text) -> "Invalid date"
+      - Reject rows with invalid revenue (text in numeric) -> "Revenue is not a number"
+      - Reject rows with quantity <= 0 or revenue <= 0 -> "negative or zero quantity/revenue"
+      - Missing product name: keep row, set "Unknown item", count as saved with warning
+      - Raw rejected row stored as exact strings (no nulls, no parsed floats)
     """
     raw_count = len(df)
     warnings: list[str] = []
     rejected_rows: list[dict] = []
+    clean_rows: list[dict] = []
+    saved_with_warnings = 0
+    raw_revenue = 0.0
 
-    # Step 1: Work on a copy
-    df = df.copy()
+    for idx, row in df.iterrows():
+        raw_dict = _format_raw_dict(row)
 
-    # Step 2: Parse money columns
-    # Apply our helper to every cell in these columns.
-    # `.apply()` calls the function once per cell.
-    df["revenue"] = df["revenue"].apply(_parse_money)
-    df["unit_price"] = df["unit_price"].apply(_parse_money) if "unit_price" in df.columns else None
-    df["quantity"] = pd.to_numeric(df.get("quantity"), errors="coerce")
+        val_date = row.get("date")
+        val_rev = row.get("revenue")
+        val_qty = row.get("quantity")
+        val_prod = row.get("product")
+        val_cat = row.get("category")
+        val_price = row.get("unit_price")
+        val_oid = row.get("order_id")
 
-    # Step 3: Parse dates
-    df["date"] = df["date"].apply(_parse_date)
+        rejection_reason = None
 
-    # Step 4: Normalize text
-    df["product"] = df["product"].apply(_normalize_text)
-    df["category"] = df["category"].apply(lambda v: _normalize_text(v, title_case=True))
-    if "order_id" in df.columns:
-        df["order_id"] = df["order_id"].apply(
-            lambda v: str(v).strip() if pd.notna(v) and str(v).strip() else None
-        )
+        # 1. Date validation
+        parsed_date = None
+        if pd.isna(val_date) or str(val_date).strip() == "":
+            rejection_reason = "Missing date"
+        else:
+            parsed_date = _parse_date(val_date)
+            if parsed_date is None:
+                rejection_reason = "Invalid date"
 
-    # Step 5: Fill missing descriptive metadata
-    df["product"] = df["product"].fillna("Unknown")
-    df["category"] = df["category"].fillna("Uncategorized")
+        # 2. Revenue validation
+        parsed_rev = None
+        if rejection_reason is None:
+            if pd.isna(val_rev) or str(val_rev).strip() == "":
+                rejection_reason = "Revenue is not a number"
+            else:
+                parsed_rev = _parse_money(val_rev)
+                if parsed_rev is None:
+                    rejection_reason = "Revenue is not a number"
+                elif parsed_rev <= 0:
+                    rejection_reason = "negative or zero quantity/revenue"
 
-    # Compute raw revenue before dropping anything
-    raw_revenue = float(df["revenue"].fillna(0).sum())
+        # 3. Quantity validation
+        parsed_qty = 1.0
+        if rejection_reason is None:
+            if val_qty is not None and not (pd.isna(val_qty) or str(val_qty).strip() == ""):
+                try:
+                    clean_q_str = str(val_qty).replace(",", "").strip()
+                    parsed_qty = float(clean_q_str)
+                    if parsed_qty <= 0:
+                        rejection_reason = "negative or zero quantity/revenue"
+                except (ValueError, TypeError):
+                    rejection_reason = "negative or zero quantity/revenue"
+            else:
+                parsed_qty = 1.0
 
-    # Step 6: Drop rows with missing financial data (revenue or date)
-    # We find specific reasons instead of a generic one
-    invalid_mask = df["revenue"].isna() | df["date"].isna()
-    if invalid_mask.any():
-        dropped = df[invalid_mask]
-        for idx, row in dropped.iterrows():
-            reasons = []
-            if pd.isna(row["date"]):
-                reasons.append("Missing date")
-            if pd.isna(row["revenue"]):
-                reasons.append("Missing revenue")
-            
-            reason_str = " and ".join(reasons)
+        if parsed_rev is not None and parsed_rev > 0:
+            raw_revenue += parsed_rev
+
+        if rejection_reason is not None:
             rejected_rows.append({
                 "original_index": idx,
-                "row": row.to_dict(), 
-                "reason": f"❌ {reason_str}"
+                "row": raw_dict,
+                "reason": rejection_reason,
             })
-        df = df[~invalid_mask]
-        invalid_removed = len(dropped)
-        warnings.append(
-            f"{invalid_removed} row(s) dropped: missing revenue or date."
-        )
+            continue
+
+        # Product name: missing -> store "Unknown item", count warning
+        is_row_warned = False
+        if pd.isna(val_prod) or str(val_prod).strip() == "":
+            product = "Unknown item"
+            is_row_warned = True
+        else:
+            product = _normalize_text(val_prod, title_case=True) or "Unknown item"
+
+        # Category
+        if val_cat is not None and not pd.isna(val_cat) and str(val_cat).strip():
+            category = _normalize_text(val_cat, title_case=True) or "Uncategorised"
+        else:
+            category = "Uncategorised"
+
+        unit_price = _parse_money(val_price) if val_price is not None else None
+        order_id = str(val_oid).strip() if (val_oid is not None and pd.notna(val_oid) and str(val_oid).strip()) else None
+
+        if is_row_warned:
+            saved_with_warnings += 1
+
+        clean_rows.append({
+            "date": parsed_date,
+            "order_id": order_id,
+            "product": product,
+            "category": category,
+            "quantity": parsed_qty,
+            "unit_price": unit_price,
+            "revenue": float(parsed_rev),
+        })
+
+    clean_df = pd.DataFrame(clean_rows)
+    if clean_df.empty:
+        clean_df = pd.DataFrame(columns=["date", "order_id", "product", "category", "quantity", "unit_price", "revenue"])
     else:
-        invalid_removed = 0
+        clean_df["revenue"] = clean_df["revenue"].astype(float)
+        clean_df["quantity"] = clean_df["quantity"].astype(float)
 
-    # Also drop rows where revenue == 0 (meaningless for analysis)
-    zero_mask = df["revenue"] == 0
-    if zero_mask.any():
-        dropped = df[zero_mask]
-        for idx, row in dropped.iterrows():
-            rejected_rows.append({
-                "original_index": idx,
-                "row": row.to_dict(), 
-                "reason": "❌ Revenue is zero"
-            })
-        df = df[~zero_mask]
-        warnings.append(f"{len(dropped)} row(s) dropped: revenue was zero.")
-        invalid_removed += len(dropped)
+    clean_count = len(clean_df)
+    clean_revenue = float(clean_df["revenue"].sum()) if not clean_df.empty else 0.0
+    invalid_removed = len(rejected_rows)
 
-    # Deduplication removed: Identical rows (e.g. 2 identical sales on the same day) are perfectly valid.
-    duplicates_removed = 0
-
-    # Step 8: Ensure correct column dtypes and reset index
-    df["revenue"] = df["revenue"].astype(float)
-    clean_revenue = float(df["revenue"].sum())
-    df = df.reset_index(drop=True)
-
-    logger.info(
-        "Sales cleaning complete: raw=%d, clean=%d, dupes=%d, invalid=%d",
-        raw_count, len(df), duplicates_removed, invalid_removed,
-    )
+    if invalid_removed > 0:
+        warnings.append(f"{invalid_removed} invalid row(s) skipped.")
+    if saved_with_warnings > 0:
+        warnings.append(f"{saved_with_warnings} row(s) saved with warnings.")
 
     return CleaningResult(
-        clean_df=df,
+        clean_df=clean_df,
         raw_count=raw_count,
-        clean_count=len(df),
+        clean_count=clean_count,
         raw_revenue=raw_revenue,
         clean_revenue=clean_revenue,
-        duplicates_removed=duplicates_removed,
+        duplicates_removed=0,
         invalid_removed=invalid_removed,
+        saved_with_warnings=saved_with_warnings,
         rejected_rows=rejected_rows,
         warnings=warnings,
     )
@@ -341,94 +496,109 @@ def clean_expenses(df: pd.DataFrame) -> CleaningResult:
     Clean an expenses DataFrame that already has standard column names:
       date, category, description, amount
 
-    Same pipeline as clean_sales but simpler (no product/qty/unit_price).
-    Deduplication key: (date, category, amount).
-
-    Args:
-        df: Raw DataFrame with standard expenses column names.
-
-    Returns:
-        CleaningResult with the cleaned DataFrame and a report.
+    Validation rules:
+      - Reject rows with missing date (cell is empty) -> "Missing date"
+      - Reject rows with invalid date (unparseable text) -> "Invalid date"
+      - Reject rows with invalid amount (text in numeric) -> "Amount is not a number"
+      - Reject rows with amount <= 0 -> "negative or zero amount"
+      - Missing category: save as "Uncategorised", count as saved with warning
+      - Raw rejected row stored as exact strings (no nulls, no parsed floats)
     """
     raw_count = len(df)
     warnings: list[str] = []
     rejected_rows: list[dict] = []
+    clean_rows: list[dict] = []
+    saved_with_warnings = 0
+    raw_revenue = 0.0
 
-    df = df.copy()
+    for idx, row in df.iterrows():
+        raw_dict = _format_raw_dict(row)
 
-    # Parse money and dates
-    df["amount"] = df["amount"].apply(_parse_money)
-    df["date"] = df["date"].apply(_parse_date)
+        val_date = row.get("date")
+        val_amt = row.get("amount")
+        val_cat = row.get("category")
+        val_desc = row.get("description")
 
-    # Normalize text
-    df["category"] = df["category"].apply(lambda v: _normalize_text(v, title_case=True))
-    df["description"] = df["description"].apply(lambda v: _normalize_text(v, title_case=False))
+        rejection_reason = None
 
-    # Fill missing category
-    df["category"] = df["category"].fillna("Uncategorized")
+        # 1. Date validation
+        parsed_date = None
+        if pd.isna(val_date) or str(val_date).strip() == "":
+            rejection_reason = "Missing date"
+        else:
+            parsed_date = _parse_date(val_date)
+            if parsed_date is None:
+                rejection_reason = "Invalid date"
 
-    # Compute raw revenue before dropping
-    raw_revenue = float(df["amount"].fillna(0).sum())
+        # 2. Amount validation
+        parsed_amt = None
+        if rejection_reason is None:
+            if pd.isna(val_amt) or str(val_amt).strip() == "":
+                rejection_reason = "Amount is not a number"
+            else:
+                parsed_amt = _parse_money(val_amt)
+                if parsed_amt is None:
+                    rejection_reason = "Amount is not a number"
+                elif parsed_amt <= 0:
+                    rejection_reason = "negative or zero amount"
 
-    # Drop rows missing amount or date
-    invalid_mask = df["amount"].isna() | df["date"].isna()
-    if invalid_mask.any():
-        dropped = df[invalid_mask]
-        for idx, row in dropped.iterrows():
-            reasons = []
-            if pd.isna(row["date"]):
-                reasons.append("Missing date")
-            if pd.isna(row["amount"]):
-                reasons.append("Missing amount")
-            
-            reason_str = " and ".join(reasons)
+        if parsed_amt is not None and parsed_amt > 0:
+            raw_revenue += parsed_amt
+
+        if rejection_reason is not None:
             rejected_rows.append({
                 "original_index": idx,
-                "row": row.to_dict(), 
-                "reason": f"❌ {reason_str}"
+                "row": raw_dict,
+                "reason": rejection_reason,
             })
-        df = df[~invalid_mask]
-        invalid_removed = len(dropped)
-        warnings.append(
-            f"{invalid_removed} row(s) dropped: missing amount or date."
-        )
+            continue
+
+        # Category: missing -> save as "Uncategorised", count warning
+        is_row_warned = False
+        if pd.isna(val_cat) or str(val_cat).strip() == "":
+            category = "Uncategorised"
+            is_row_warned = True
+        else:
+            category = normalize_category(val_cat)
+            if category == "Uncategorised":
+                is_row_warned = True
+
+        description = _normalize_text(val_desc, title_case=False) if (val_desc is not None and pd.notna(val_desc) and str(val_desc).strip()) else None
+
+        if is_row_warned:
+            saved_with_warnings += 1
+
+        clean_rows.append({
+            "date": parsed_date,
+            "category": category,
+            "description": description,
+            "amount": float(parsed_amt),
+        })
+
+    clean_df = pd.DataFrame(clean_rows)
+    if clean_df.empty:
+        clean_df = pd.DataFrame(columns=["date", "category", "description", "amount"])
     else:
-        invalid_removed = 0
+        clean_df["amount"] = clean_df["amount"].astype(float)
 
-    # Drop zero-amount rows
-    zero_mask = df["amount"] == 0
-    if zero_mask.any():
-        dropped = df[zero_mask]
-        for idx, row in dropped.iterrows():
-            rejected_rows.append({
-                "original_index": idx,
-                "row": row.to_dict(), 
-                "reason": "❌ Amount is zero"
-            })
-        df = df[~zero_mask]
-        warnings.append(f"{len(dropped)} row(s) dropped: amount was zero.")
-        invalid_removed += len(dropped)
+    clean_count = len(clean_df)
+    clean_revenue = float(clean_df["amount"].sum()) if not clean_df.empty else 0.0
+    invalid_removed = len(rejected_rows)
 
-    # Deduplication removed: Identical expenses (e.g. 2 identical LPG cylinders bought) are valid.
-    duplicates_removed = 0
-
-    df["amount"] = df["amount"].astype(float)
-    clean_revenue = float(df["amount"].sum())
-    df = df.reset_index(drop=True)
-
-    logger.info(
-        "Expenses cleaning complete: raw=%d, clean=%d, dupes=%d, invalid=%d",
-        raw_count, len(df), duplicates_removed, invalid_removed,
-    )
+    if invalid_removed > 0:
+        warnings.append(f"{invalid_removed} invalid row(s) skipped.")
+    if saved_with_warnings > 0:
+        warnings.append(f"{saved_with_warnings} row(s) saved with warnings.")
 
     return CleaningResult(
-        clean_df=df,
+        clean_df=clean_df,
         raw_count=raw_count,
-        clean_count=len(df),
+        clean_count=clean_count,
         raw_revenue=raw_revenue,
         clean_revenue=clean_revenue,
-        duplicates_removed=duplicates_removed,
+        duplicates_removed=0,
         invalid_removed=invalid_removed,
+        saved_with_warnings=saved_with_warnings,
         rejected_rows=rejected_rows,
         warnings=warnings,
     )

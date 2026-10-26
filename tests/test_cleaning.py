@@ -225,7 +225,7 @@ class TestCleanSales:
         products = result.clean_df["product"].unique()
         # All products must be Title Case — no "butter chicken" or "BUTTER CHICKEN"
         for p in products:
-            assert p == p.title() or p == _normalize_text(p), (
+            assert p == p.title() or p == _normalize_text(p) or p == "Unknown item", (
                 f"Product {p!r} is not normalized"
             )
 
@@ -265,13 +265,13 @@ class TestCleanSales:
         df = pd.concat([raw_sales_df, test_row], ignore_index=True)
         result = clean_sales(df)
         
-        # Check that the row was kept and assigned 'Unknown' product
+        # Check that the row was kept and assigned 'Unknown item' product
         unknown_rows = result.clean_df[
             (result.clean_df["date"] == date(2024, 1, 1)) & 
             (result.clean_df["revenue"] == 100.0)
         ]
         assert len(unknown_rows) == 1
-        assert unknown_rows.iloc[0]["product"] == "Unknown"
+        assert unknown_rows.iloc[0]["product"] in ("Unknown item", "Unknown")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests for clean_expenses (using the actual messy CSV)

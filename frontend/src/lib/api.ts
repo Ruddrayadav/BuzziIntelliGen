@@ -1,12 +1,25 @@
 export type PublicUser = { username: string; business_name: string };
 export type Credentials = { username: string; password: string };
 export type RegisterInput = Credentials & { business_name: string };
-export type FileType = "sales" | "expenses";
+export type FileType = "sales" | "expenses" | "cashbook";
+
+export type CashbookSummary = {
+  sales_count: number;
+  expenses_count: number;
+  sales_total: number;
+  expenses_total: number;
+  split_column: string;
+  split_method: string;
+  message: string;
+};
 
 export type UploadPreview = {
   filename: string;
+  file_hash?: string;
   detected_type: FileType;
   file_type: FileType;
+  is_cashbook?: boolean;
+  cashbook_summary?: CashbookSummary;
   columns: string[];
   suggested_mapping: Record<string, string | null>;
   mapping_methods: Record<string, "rule" | "llm" | "unmapped">;
@@ -20,12 +33,96 @@ export type UploadResult = {
   upload_log_id: number;
   filename: string;
   file_type: FileType;
+  is_cashbook?: boolean;
+  cashbook_summary?: string;
   rows_read: number;
   rows_saved: number;
+  rows_with_warnings?: number;
   rows_skipped: number;
   duplicates_removed: number;
   skipped_rows: Array<{ original_index: number; original_row: Record<string, unknown>; reason: string }>;
   warnings: string[];
+};
+
+export type UploadHistoryItem = {
+  id: number;
+  filename: string;
+  file_type: string;
+  uploaded_at: string | null;
+  rows_raw: number;
+  rows_saved: number;
+  rows_with_warnings?: number;
+  rows_skipped: number;
+  status: string;
+  notes?: string | null;
+  has_rejected_rows: boolean;
+};
+
+export type SkippedRowItem = {
+  id: number;
+  upload_id: number;
+  reason: string;
+  row_data: Record<string, unknown>;
+  created_at: string | null;
+};
+
+export type AttentionItem = {
+  id: string;
+  title: string;
+  message: string;
+  severity: "critical" | "warning" | "info";
+  action_tab: "overview" | "comparison" | "anomalies" | "diagnostics";
+  action_label: string;
+  score?: number;
+};
+
+export type DayOfWeekDay = {
+  day_index: number;
+  day_name: string;
+  total_revenue: number;
+  avg_revenue: number;
+  order_count: number;
+  share_pct: number;
+};
+
+export type DayOfWeekInsight = {
+  days: DayOfWeekDay[];
+  best_day: string;
+  lowest_day: string;
+  best_avg_revenue: number;
+  lowest_avg_revenue: number;
+  headline: string;
+  weekend_headline: string;
+};
+
+export type SlowMoverItem = {
+  product: string;
+  units_sold: number;
+  revenue: number;
+  last_sold_date: string;
+  days_since_last_sale: number;
+  weekly_velocity: number;
+  status: "Stalled" | "Sluggish" | "Low Volume" | "Moderate";
+  recommendation: string;
+};
+
+export type TargetPacing = {
+  has_target: boolean;
+  month: string;
+  month_label: string;
+  target_amount: number;
+  current_revenue: number;
+  progress_pct: number;
+  days_in_month: number;
+  days_elapsed: number;
+  days_remaining: number;
+  expected_pace_amount: number;
+  pace_difference: number;
+  pace_pct: number;
+  pace_status: "achieved" | "ahead" | "on_track" | "behind" | "none";
+  projected_revenue: number;
+  daily_needed_remaining: number;
+  headline: string;
 };
 
 export type DashboardData = {
@@ -33,9 +130,20 @@ export type DashboardData = {
   total_expenses: number;
   net_profit: number;
   average_order_value: number;
+  total_transactions: number;
+  total_units_sold: number;
   revenue_trend: Array<{ date: string; revenue: number }>;
+  expense_trend: Array<{ date: string; amount: number }>;
   top_products: Array<{ product: string; revenue: number }>;
+  top_products_by_qty: Array<{ product: string; quantity: number; revenue: number }>;
+  bottom_products_by_qty: Array<{ product: string; quantity: number; revenue: number }>;
+  category_performance: Array<{ category: string; revenue: number; units_sold: number; order_count: number; share_pct: number }>;
   expense_breakdown: Array<{ category: string; amount: number }>;
+  takeaways?: Record<string, string>;
+  attention_items?: AttentionItem[];
+  day_of_week_insight?: DayOfWeekInsight | null;
+  slow_movers?: SlowMoverItem[];
+  target_pacing?: TargetPacing | null;
 };
 
 export type PeriodSummary = {
@@ -52,13 +160,13 @@ export type PeriodComparison = {
   current: PeriodSummary;
   prior: PeriodSummary;
   revenue_delta: number;
-  revenue_delta_pct: number;
+  revenue_delta_pct: number | null;
   expense_delta: number;
-  expense_delta_pct: number;
+  expense_delta_pct: number | null;
   profit_delta: number;
-  profit_delta_pct: number;
+  profit_delta_pct: number | null;
   aov_delta: number;
-  aov_delta_pct: number;
+  aov_delta_pct: number | null;
   margin_delta_pct: number;
   product_shifts: Array<Record<string, unknown>>;
   expense_shifts: Array<Record<string, unknown>>;
@@ -77,6 +185,7 @@ export type Anomaly = {
   anomaly_type: string;
   severity: "critical" | "warning" | "info";
   description: string;
+  expense_details?: Array<{ category: string; description: string; amount: number }>;
 };
 
 export type AnomalyReport = {
@@ -107,8 +216,26 @@ export type ProfitDiagnosis = {
 export type AskAnswer = {
   text: string;
   intent: string;
+  metric?: string;
+  period?: string;
+  period_label?: string;
+  headline?: string;
   table: { columns: string[]; rows: Array<Record<string, unknown>> };
 };
+
+export type ChatMessageItem = {
+  id: number;
+  question: string;
+  answer_text: string;
+  intent?: string;
+  metric?: string;
+  period?: string;
+  period_label?: string;
+  headline?: string;
+  table?: { columns: string[]; rows: Array<Record<string, unknown>> } | null;
+  created_at: string | null;
+};
+
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
@@ -136,7 +263,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       : "The server returned an invalid response. Please try again.";
     throw new ApiError(message, response.status);
   }
-  if (!response.ok) throw new ApiError(body.message ?? "We could not complete that request.", response.status);
+  if (!response.ok) {
+    const detailMsg = typeof body?.detail === "string" ? body.detail : body?.detail?.message;
+    const msg = detailMsg ?? body?.message ?? "We could not complete that request.";
+    throw new ApiError(msg, response.status);
+  }
   return body as T;
 }
 
@@ -151,20 +282,102 @@ export const api = {
     if (fileType) form.append("file_type", fileType);
     return request<UploadPreview>("/api/upload/preview", { method: "POST", body: form });
   },
-  commitUpload: (file: File, fileType: FileType, mapping: Record<string, string>) => {
+  commitUpload: (file: File, fileType: FileType, mapping: Record<string, string>, replace = false) => {
     const form = new FormData();
     form.append("file", file);
     form.append("file_type", fileType);
     form.append("mapping", JSON.stringify(mapping));
+    if (replace) form.append("replace", "true");
     return request<UploadResult>("/api/upload/commit", { method: "POST", body: form });
   },
-  dashboard: () => request<DashboardData>("/api/dashboard"),
+  dashboard: (startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams();
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    const q = params.toString();
+    return request<DashboardData>(`/api/dashboard${q ? `?${q}` : ""}`);
+  },
+  trend: (granularity: "daily" | "weekly" | "monthly" = "daily", startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams({ granularity });
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    return request<Array<{ label: string; revenue: number; expenses: number; date?: string }>>(
+      `/api/dashboard/trend?${params.toString()}`
+    );
+  },
   months: () => request<{ months: string[] }>("/api/analytics/months"),
   compare: (currentMonth?: string, priorMonth?: string) => request<PeriodComparison | null>(`/api/analytics/compare${monthsQuery(currentMonth, priorMonth)}`),
   anomalies: () => request<AnomalyReport>("/api/analytics/anomalies"),
   diagnosis: (currentMonth?: string, priorMonth?: string) => request<ProfitDiagnosis | null>(`/api/analytics/diagnosis${monthsQuery(currentMonth, priorMonth)}`),
+  attention: () => request<AttentionItem[]>("/api/dashboard/attention"),
+  dayOfWeek: (startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams();
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    const q = params.toString();
+    return request<DayOfWeekInsight | null>(`/api/dashboard/day-of-week${q ? `?${q}` : ""}`);
+  },
+  slowMovers: (startDate?: string, endDate?: string, limit = 10) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    return request<SlowMoverItem[]>(`/api/dashboard/slow-movers?${params.toString()}`);
+  },
+  getTarget: (month?: string) => {
+    const params = new URLSearchParams();
+    if (month) params.set("month", month);
+    const q = params.toString();
+    return request<TargetPacing | null>(`/api/dashboard/target${q ? `?${q}` : ""}`);
+  },
+  setTarget: (month: string, target_amount: number) =>
+    request<TargetPacing>("/api/dashboard/target", {
+      method: "POST",
+      body: JSON.stringify({ month, target_amount }),
+    }),
+  deleteTarget: (month: string) => {
+    const params = new URLSearchParams({ month });
+    return request<{ deleted: boolean; month: string }>(`/api/dashboard/target?${params.toString()}`, {
+      method: "DELETE",
+    });
+  },
+  uploadHistory: () => request<UploadHistoryItem[]>("/api/upload/history"),
+  uploadSkippedRows: (uploadId: number) =>
+    request<SkippedRowItem[]>(`/api/upload/history/${uploadId}/skipped`),
+  undoUpload: (uploadId: number) =>
+    request<{ success: boolean; message: string; deleted_upload_id: number }>(
+      `/api/upload/history/${uploadId}`,
+      { method: "DELETE" }
+    ),
+  downloadMonthlyPdf: async (month?: string): Promise<void> => {
+    const params = new URLSearchParams();
+    if (month) params.set("month", month);
+    const q = params.toString();
+    const url = `${import.meta.env.VITE_API_URL ?? ""}/api/reports/monthly-pdf${q ? `?${q}` : ""}`;
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const msg = body?.message ?? body?.detail ?? "Failed to generate PDF report.";
+      throw new ApiError(msg, response.status);
+    }
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `bizintel-report-${month || "latest"}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+  },
   ask: (question: string) => request<AskAnswer>("/api/ask", { method: "POST", body: JSON.stringify({ question }) }),
+  chatHistory: () => request<ChatMessageItem[]>("/api/ask/history"),
+  clearChatHistory: () =>
+    request<{ success: boolean; deleted_count: number }>("/api/ask/history", {
+      method: "DELETE",
+    }),
 };
+
+
 
 function monthsQuery(currentMonth?: string, priorMonth?: string) {
   const params = new URLSearchParams();

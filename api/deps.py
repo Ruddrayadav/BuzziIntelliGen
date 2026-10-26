@@ -21,13 +21,35 @@ class SessionUser:
     business_name: str
 
 
-def _serializer() -> URLSafeTimedSerializer:
-    secret = os.environ.get("BIZINTEL_SESSION_SECRET")
-    if not secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server session is not configured. Please set BIZINTEL_SESSION_SECRET.",
+INSECURE_PLACEHOLDER_SECRETS = {
+    "replace-with-a-long-random-secret",
+    "replace-with-a-long-random-value",
+    "your-secret-key",
+    "change-me",
+}
+
+
+def validate_session_secret() -> str:
+    """
+    Validate that BIZINTEL_SESSION_SECRET is configured and not the insecure placeholder.
+    Refuses to run if the secret is missing or default.
+    """
+    secret = os.environ.get("BIZINTEL_SESSION_SECRET", "").strip()
+    if not secret or secret in INSECURE_PLACEHOLDER_SECRETS:
+        raise RuntimeError(
+            "BIZINTEL_SESSION_SECRET is missing or still set to the insecure placeholder. "
+            "Please configure a long, random secret in your .env file."
         )
+    return secret
+
+
+def is_cookie_secure() -> bool:
+    """Return True if session cookies should have the secure flag set (HTTPS)."""
+    return os.environ.get("BIZINTEL_COOKIE_SECURE", "false").strip().lower() in ("true", "1", "yes")
+
+
+def _serializer() -> URLSafeTimedSerializer:
+    secret = validate_session_secret()
     return URLSafeTimedSerializer(secret_key=secret, salt=SESSION_SALT)
 
 
@@ -43,7 +65,7 @@ def set_session_cookie(response: Response, user: SessionUser) -> None:
         value=value,
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
-        secure=False,  # Local development uses http://localhost.
+        secure=is_cookie_secure(),
         samesite="lax",
         path="/",
     )

@@ -36,15 +36,19 @@ from typing import Optional
 
 import pandas as pd
 
+from sqlalchemy import func
+
 from config import settings
 from db.database import get_db, init_db
 from db.models import Expenses, Sales, UploadLog, RejectedRow
-from services.cleaning_service import CleaningResult, clean_dataframe
+from services.cleaning_service import CleaningResult, clean_dataframe, _parse_money, normalize_category, _format_raw_dict
 from services.mapping_service import (
     ColumnMapping,
     apply_mapping,
     suggest_mapping,
+    validate_confirmed_mapping,
 )
+from api.detector import _has_word
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +68,7 @@ class UploadPreview:
     FIELDS:
       raw_df          — Full raw DataFrame (all original columns, no changes).
       filename        — Original filename for display.
-      file_type       — "sales" or "expenses"
+      file_type       — "sales" or "expenses" or "cashbook"
       suggested       — ColumnMapping with rule/LLM suggestions.
       sample_rows     — First 5 rows of the raw DataFrame for preview table.
       raw_row_count   — Total rows in the uploaded file.
@@ -75,6 +79,8 @@ class UploadPreview:
     file_type: str
     suggested: ColumnMapping
     raw_row_count: int
+    is_cashbook: bool = False
+    cashbook_summary: Optional[dict] = None
 
     @property
     def sample_rows(self) -> pd.DataFrame:
@@ -87,6 +93,31 @@ class UploadPreview:
 
 
 @dataclass
+class CashbookSplitResult:
+    """Holds partitioned sales and expense DataFrames produced from a cash-book file."""
+    sales_df: pd.DataFrame
+    expenses_df: pd.DataFrame
+    sales_count: int
+    expenses_count: int
+    sales_total: float
+    expenses_total: float
+    split_column: str
+    split_method: str  # "debit_credit" | "type_column" | "amount_sign"
+    summary_message: str
+
+    def to_dict(self) -> dict:
+        return {
+            "sales_count": self.sales_count,
+            "expenses_count": self.expenses_count,
+            "sales_total": self.sales_total,
+            "expenses_total": self.expenses_total,
+            "split_column": self.split_column,
+            "split_method": self.split_method,
+            "message": self.summary_message,
+        }
+
+
+@dataclass
 class UploadResult:
     """
     Returned by Phase B (execute_upload) after data is saved to the database.
@@ -96,7 +127,7 @@ class UploadResult:
       upload_log_id    — The ID of the UploadLog row in the database.
                          Use this to query the saved data later.
       filename         — Original filename.
-      file_type        — "sales" or "expenses"
+      file_type        — "sales", "expenses", or "cashbook"
       raw_count        — Rows in the original file.
       clean_count      — Rows actually saved to the database.
       duplicates_removed — Rows removed as duplicates.
@@ -115,17 +146,28 @@ class UploadResult:
     clean_revenue: float
     duplicates_removed: int
     invalid_removed: int
+    saved_with_warnings: int = 0
     rejected_rows_detailed: list[dict] = field(default_factory=list)
     rejected_rows_with_revenue_count: int = 0
     rejected_revenue_excluded: float = 0.0
     warnings: list[str] = field(default_factory=list)
     error_message: Optional[str] = None
+    is_duplicate: bool = False
+    existing_upload_id: Optional[int] = None
+    is_cashbook: bool = False
+    cashbook_summary: Optional[str] = None
+    sales_upload_id: Optional[int] = None
+    expenses_upload_id: Optional[int] = None
 
     def summary(self) -> str:
         """One-line plain-language summary for the owner."""
         if not self.success:
             return f"Upload failed: {self.error_message}"
+        if self.is_cashbook and self.cashbook_summary:
+            return f"✅ Cash-book imported: {self.cashbook_summary}"
         parts = [f"✅ {self.clean_count} rows saved from '{self.filename}'."]
+        if self.saved_with_warnings:
+            parts.append(f"{self.saved_with_warnings} saved with warnings.")
         if self.duplicates_removed:
             parts.append(f"{self.duplicates_removed} duplicates removed.")
         if self.invalid_removed:
@@ -189,8 +231,11 @@ def read_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
         Raw DataFrame with all original columns. No cleaning yet.
 
     Raises:
-        ValueError: If the file cannot be parsed.
+        ValueError: If the file cannot be parsed, is corrupt, or is empty.
     """
+    if not file_bytes or not file_bytes.strip():
+        raise ValueError(f"The file '{filename}' is empty. Please upload a file containing data.")
+
     ext = Path(filename).suffix.lower()
     buffer = io.BytesIO(file_bytes)
 
@@ -204,25 +249,249 @@ def read_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 df = pd.read_csv(buffer, encoding="latin-1")
                 logger.warning("File %s read with latin-1 encoding fallback", filename)
 
+            # Semicolon-separated CSV auto-detection
+            if len(df.columns) == 1 and ";" in str(df.columns[0]):
+                buffer.seek(0)
+                try:
+                    df = pd.read_csv(buffer, sep=";", encoding="utf-8")
+                except UnicodeDecodeError:
+                    buffer.seek(0)
+                    df = pd.read_csv(buffer, sep=";", encoding="latin-1")
+                logger.info("Detected semicolon delimiter for %s — parsed %d columns", filename, len(df.columns))
+
         elif ext in (".xlsx", ".xls"):
             df = pd.read_excel(buffer, engine="openpyxl" if ext == ".xlsx" else "xlrd")
 
         else:
-            raise ValueError(f"Unsupported extension: {ext}")
+            raise ValueError(f"Unsupported file format '{ext}'. Please upload a CSV or Excel file.")
 
     except Exception as exc:
         if isinstance(exc, ValueError):
             raise
+        logger.warning("Failed to parse file '%s': %s", filename, exc)
+        file_type_name = "CSV" if ext == ".csv" else "Excel" if ext in (".xlsx", ".xls") else ext.upper().lstrip(".")
         raise ValueError(
-            f"Could not read '{filename}'. Is it a valid {ext} file? "
-            f"Detail: {exc}"
-        ) from exc
+            f"Could not read '{filename}'. The file appears to be corrupted or not a valid {file_type_name} file. "
+            "Please check the file and try again."
+        ) from None
 
-    if df.empty:
-        raise ValueError(f"'{filename}' appears to be empty — no rows found.")
+    if len(df.columns) == 0:
+        raise ValueError(f"The file '{filename}' is empty. Please upload a file containing data.")
+
+    if len(df) == 0:
+        raise ValueError(
+            f"The file '{filename}' contains only column headers and no data rows. "
+            "Please upload a file with transaction records."
+        )
 
     logger.info("File read: %s — %d rows, %d columns", filename, len(df), len(df.columns))
     return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cash-book Splitting
+# ─────────────────────────────────────────────────────────────────────────────
+def split_cashbook(raw_df: pd.DataFrame) -> CashbookSplitResult:
+    """
+    Split a combined cash-book DataFrame into separate sales and expenses DataFrames.
+
+    Supports three common small-business accounting formats:
+      1. Dual Debit / Credit columns:
+         - Credit / Inflow rows -> Sales (revenue = Credit)
+         - Debit / Outflow rows -> Expenses (amount = Debit)
+      2. Single Amount + Type column:
+         - Type matching Inflow (Sale, Credit, Income, Receipt) -> Sales
+         - Type matching Outflow (Expense, Debit, Purchase, Payment) -> Expenses
+      3. Single Amount with positive/negative signs:
+         - Positive (> 0) -> Sales
+         - Negative (< 0) -> Expenses (amount = abs(val))
+
+    Returns:
+        CashbookSplitResult containing sales_df, expenses_df, counts, totals, and a summary message.
+    """
+    if raw_df.empty:
+        return CashbookSplitResult(
+            sales_df=pd.DataFrame(columns=["date", "product", "revenue"]),
+            expenses_df=pd.DataFrame(columns=["date", "category", "amount"]),
+            sales_count=0,
+            expenses_count=0,
+            sales_total=0.0,
+            expenses_total=0.0,
+            split_column="none",
+            split_method="empty",
+            summary_message="Empty cash-book file.",
+        )
+
+    col_names = raw_df.columns.tolist()
+    col_lower = {c: str(c).strip().lower().replace("_", " ").replace("-", " ") for c in col_names}
+
+    # 1. Identify Date column
+    date_col = None
+    for c in col_names:
+        cl = col_lower[c]
+        if any(_has_word(cl, kw) for kw in ("date", "txn date", "transaction date", "entry date", "day")):
+            date_col = c
+            break
+    if not date_col:
+        date_col = col_names[0]
+
+    # 2. Identify Description / Particulars column
+    desc_col = None
+    for c in col_names:
+        if c == date_col:
+            continue
+        cl = col_lower[c]
+        if any(_has_word(cl, kw) for kw in ("description", "particulars", "particular", "details", "narration", "memo", "remarks", "party", "payee", "item", "name")):
+            desc_col = c
+            break
+    if not desc_col:
+        for c in col_names:
+            if c != date_col and (pd.api.types.is_string_dtype(raw_df[c]) or pd.api.types.is_object_dtype(raw_df[c])):
+                desc_col = c
+                break
+    if not desc_col:
+        desc_col = date_col
+
+    # 3. Strategy A: Check for Debit and Credit columns
+    debit_col = None
+    credit_col = None
+    for c in col_names:
+        cl = col_lower[c]
+        if any(_has_word(cl, kw) for kw in ("debit", "dr", "paid", "withdrawal", "money out", "cash out", "outflow", "expense")):
+            debit_col = c
+        if any(_has_word(cl, kw) for kw in ("credit", "cr", "received", "deposit", "money in", "cash in", "inflow", "receipt")):
+            credit_col = c
+
+    if debit_col and credit_col:
+        dr_vals = raw_df[debit_col].apply(_parse_money).fillna(0.0)
+        cr_vals = raw_df[credit_col].apply(_parse_money).fillna(0.0)
+        sales_mask = cr_vals > 0
+        exp_mask = dr_vals > 0
+
+        sales_df = pd.DataFrame({
+            "date": raw_df.loc[sales_mask, date_col],
+            "product": raw_df.loc[sales_mask, desc_col].fillna("Cash Sale").astype(str),
+            "revenue": cr_vals.loc[sales_mask],
+        })
+        expenses_df = pd.DataFrame({
+            "date": raw_df.loc[exp_mask, date_col],
+            "category": raw_df.loc[exp_mask, desc_col].fillna("Cash Expense").astype(str),
+            "amount": dr_vals.loc[exp_mask],
+            "description": raw_df.loc[exp_mask, desc_col].fillna("Cash Expense").astype(str),
+        })
+
+        sales_cnt = len(sales_df)
+        exp_cnt = len(expenses_df)
+        sales_tot = round(float(sales_df["revenue"].sum()), 2) if sales_cnt > 0 else 0.0
+        exp_tot = round(float(expenses_df["amount"].sum()), 2) if exp_cnt > 0 else 0.0
+        msg = f"Split into {sales_cnt} sales transactions (₹{sales_tot:,.2f}) and {exp_cnt} expense entries (₹{exp_tot:,.2f}) by '{debit_col} / {credit_col}'."
+
+        return CashbookSplitResult(
+            sales_df=sales_df,
+            expenses_df=expenses_df,
+            sales_count=sales_cnt,
+            expenses_count=exp_cnt,
+            sales_total=sales_tot,
+            expenses_total=exp_tot,
+            split_column=f"{debit_col} / {credit_col}",
+            split_method="debit_credit",
+            summary_message=msg,
+        )
+
+    # 4. Strategy B: Check for Type column + Amount column
+    type_col = None
+    amt_col = None
+    for c in col_names:
+        cl = col_lower[c]
+        if any(_has_word(cl, kw) for kw in ("type", "txn type", "transaction type", "entry type", "dr cr", "cr dr", "d c")):
+            type_col = c
+        if any(_has_word(cl, kw) for kw in ("amount", "total", "value", "net", "rs", "inr")):
+            amt_col = c
+
+    if type_col and amt_col:
+        amt_vals = raw_df[amt_col].apply(_parse_money).fillna(0.0).abs()
+        type_str = raw_df[type_col].astype(str).str.strip().str.lower()
+        sales_mask = type_str.apply(lambda s: any(_has_word(s, kw) for kw in ("sale", "sales", "credit", "cr", "income", "receipt", "in", "deposit"))) & (amt_vals > 0)
+        exp_mask = type_str.apply(lambda s: any(_has_word(s, kw) for kw in ("expense", "expenses", "debit", "dr", "payment", "purchase", "out", "withdrawal"))) & (amt_vals > 0)
+
+        sales_df = pd.DataFrame({
+            "date": raw_df.loc[sales_mask, date_col],
+            "product": raw_df.loc[sales_mask, desc_col].fillna("Cash Sale").astype(str),
+            "revenue": amt_vals.loc[sales_mask],
+        })
+        expenses_df = pd.DataFrame({
+            "date": raw_df.loc[exp_mask, date_col],
+            "category": raw_df.loc[exp_mask, desc_col].fillna("Cash Expense").astype(str),
+            "amount": amt_vals.loc[exp_mask],
+            "description": raw_df.loc[exp_mask, desc_col].fillna("Cash Expense").astype(str),
+        })
+
+        sales_cnt = len(sales_df)
+        exp_cnt = len(expenses_df)
+        sales_tot = round(float(sales_df["revenue"].sum()), 2) if sales_cnt > 0 else 0.0
+        exp_tot = round(float(expenses_df["amount"].sum()), 2) if exp_cnt > 0 else 0.0
+        msg = f"Split into {sales_cnt} sales transactions (₹{sales_tot:,.2f}) and {exp_cnt} expense entries (₹{exp_tot:,.2f}) by '{type_col}'."
+
+        return CashbookSplitResult(
+            sales_df=sales_df,
+            expenses_df=expenses_df,
+            sales_count=sales_cnt,
+            expenses_count=exp_cnt,
+            sales_total=sales_tot,
+            expenses_total=exp_tot,
+            split_column=type_col,
+            split_method="type_column",
+            summary_message=msg,
+        )
+
+    # 5. Strategy C: Check for signed Amount column (positive vs negative)
+    if amt_col:
+        signed_vals = raw_df[amt_col].apply(_parse_money).fillna(0.0)
+        if (signed_vals > 0).any() and (signed_vals < 0).any():
+            sales_mask = signed_vals > 0
+            exp_mask = signed_vals < 0
+
+            sales_df = pd.DataFrame({
+                "date": raw_df.loc[sales_mask, date_col],
+                "product": raw_df.loc[sales_mask, desc_col].fillna("Cash Sale").astype(str),
+                "revenue": signed_vals.loc[sales_mask],
+            })
+            expenses_df = pd.DataFrame({
+                "date": raw_df.loc[exp_mask, date_col],
+                "category": raw_df.loc[exp_mask, desc_col].fillna("Cash Expense").astype(str),
+                "amount": signed_vals.loc[exp_mask].abs(),
+                "description": raw_df.loc[exp_mask, desc_col].fillna("Cash Expense").astype(str),
+            })
+
+            sales_cnt = len(sales_df)
+            exp_cnt = len(expenses_df)
+            sales_tot = round(float(sales_df["revenue"].sum()), 2) if sales_cnt > 0 else 0.0
+            exp_tot = round(float(expenses_df["amount"].sum()), 2) if exp_cnt > 0 else 0.0
+            msg = f"Split into {sales_cnt} sales transactions (₹{sales_tot:,.2f}) and {exp_cnt} expense entries (₹{exp_tot:,.2f}) by '{amt_col}' sign."
+
+            return CashbookSplitResult(
+                sales_df=sales_df,
+                expenses_df=expenses_df,
+                sales_count=sales_cnt,
+                expenses_count=exp_cnt,
+                sales_total=sales_tot,
+                expenses_total=exp_tot,
+                split_column=amt_col,
+                split_method="amount_sign",
+                summary_message=msg,
+            )
+
+    return CashbookSplitResult(
+        sales_df=pd.DataFrame(columns=["date", "product", "revenue"]),
+        expenses_df=pd.DataFrame(columns=["date", "category", "amount"]),
+        sales_count=0,
+        expenses_count=0,
+        sales_total=0.0,
+        expenses_total=0.0,
+        split_column="none",
+        split_method="unrecognized",
+        summary_message="Could not find debit/credit columns or type column to split cash-book.",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -244,7 +513,7 @@ def suggest_mapping_from_file(
     Args:
         file_bytes: Raw file bytes from the upload widget.
         filename:   Original filename (used for format detection + display).
-        file_type:  "sales" or "expenses" — chosen by the owner in the UI.
+        file_type:  "sales", "expenses", or "cashbook"
         use_llm:    Whether to use the LLM for ambiguous column names.
                     Set to False in tests or when Ollama is offline.
 
@@ -259,6 +528,24 @@ def suggest_mapping_from_file(
 
     # Read the file into a DataFrame
     raw_df = read_file(file_bytes, filename)
+
+    # If cash-book, split into sales and expenses preview
+    if file_type == "cashbook":
+        split_res = split_cashbook(raw_df)
+        mapping = ColumnMapping(
+            file_type="cashbook",
+            suggested={},
+            method={},
+        )
+        return UploadPreview(
+            raw_df=raw_df,
+            filename=filename,
+            file_type="cashbook",
+            suggested=mapping,
+            raw_row_count=len(raw_df),
+            is_cashbook=True,
+            cashbook_summary=split_res.to_dict(),
+        )
 
     # Suggest mapping (rules + optional LLM)
     mapping = suggest_mapping(
@@ -343,7 +630,7 @@ def _build_expense_rows(
                 tenant_id=tenant_id,
                 upload_id=upload_id,
                 date=row["date"],
-                category=row["category"],
+                category=normalize_category(row["category"]),
                 description=_nan_to_none(row.get("description")),
                 amount=float(row["amount"]),
             )
@@ -360,6 +647,8 @@ def execute_upload(
     file_type: str,
     filename: str,
     tenant_id: str,
+    file_hash: Optional[str] = None,
+    replace_existing: bool = False,
 ) -> UploadResult:
     """
     Phase B of the upload: apply mapping, clean, and save to the database.
@@ -369,35 +658,53 @@ def execute_upload(
     during the upload flow.
 
     Steps:
+      0. Validate confirmed mapping server-side (required fields, no duplicates).
+      0.5 Check file_hash duplicate for this tenant; reject (409) or replace old import.
       1. Apply confirmed_mapping to raw_df → standard column names.
       2. Run cleaning pipeline → CleaningResult.
       3. If zero clean rows remain → return failure (don't write to DB).
-      4. Create UploadLog record.
+      4. Create UploadLog record (with file_hash).
       5. Bulk-insert Sales or Expenses rows linked to that UploadLog.
       6. Commit everything atomically (all or nothing).
       7. Return UploadResult.
-
-    ATOMICITY:
-      Steps 4-6 happen inside a single DB session. If step 5 fails midway,
-      the session rolls back and no partial data is saved. get_db() handles
-      this via its try/except/finally.
-
-    Args:
-        raw_df:            Raw DataFrame from Phase A (UploadPreview.raw_df).
-        confirmed_mapping: {raw_col: standard_col} approved by the owner.
-        file_type:         "sales" or "expenses"
-        filename:          Original filename for the UploadLog record.
-        tenant_id:         The logged-in owner's ID. Every saved row gets this.
-
-    Returns:
-        UploadResult with success status, counts, and human-readable summary.
     """
     # Ensure DB tables exist (idempotent — safe to call every time)
     init_db()
 
     raw_count = len(raw_df)
 
+    # ── Step 0.5: Duplicate detection via file_hash ───────────────────────────
+    if file_hash:
+        with get_db() as db:
+            existing = (
+                db.query(UploadLog)
+                .filter(UploadLog.tenant_id == tenant_id, UploadLog.file_hash == file_hash)
+                .first()
+            )
+            if existing and not replace_existing:
+                return UploadResult(
+                    success=False,
+                    upload_log_id=None,
+                    filename=filename,
+                    file_type=file_type,
+                    raw_count=raw_count,
+                    clean_count=0,
+                    raw_revenue=0.0,
+                    clean_revenue=0.0,
+                    duplicates_removed=0,
+                    invalid_removed=0,
+                    is_duplicate=True,
+                    existing_upload_id=existing.id,
+                    error_message=(
+                        f"This file has already been imported on {existing.uploaded_at.strftime('%d %b %Y')} "
+                        f"as '{existing.filename}'. You can skip it or replace the previous import."
+                    ),
+                )
+
     try:
+        # ── Step 0: Validate confirmed mapping server-side ────────────────────
+        validate_confirmed_mapping(confirmed_mapping, file_type, raw_df.columns.tolist())
+
         # ── Step 1: Apply confirmed mapping ──────────────────────────────────
         standard_df = apply_mapping(raw_df, confirmed_mapping)
         logger.info(
@@ -424,16 +731,19 @@ def execute_upload(
         for r in clean_result.rejected_rows:
             idx = r.get("original_index")
             if idx is not None and idx in raw_df.index:
-                orig_row_dict = raw_df.loc[idx].to_dict()
+                orig_series = raw_df.loc[idx]
+                if isinstance(orig_series, pd.DataFrame):
+                    orig_series = orig_series.iloc[0]
+                orig_row_dict = _format_raw_dict(orig_series)
             else:
                 orig_row_dict = r["row"]
             
             # Check if it had valid revenue despite being rejected
-            rev_val = r["row"].get("revenue") or r["row"].get("amount")
-            if pd.notna(rev_val):
+            rev_val = orig_row_dict.get("revenue") or orig_row_dict.get("Revenue") or orig_row_dict.get("amount") or orig_row_dict.get("Amount")
+            if rev_val:
                 try:
-                    f_val = float(rev_val)
-                    if f_val > 0:
+                    f_val = _parse_money(rev_val)
+                    if f_val and f_val > 0:
                         rejected_with_revenue += 1
                         rejected_rev_total += f_val
                 except (ValueError, TypeError):
@@ -458,6 +768,7 @@ def execute_upload(
                 clean_revenue=0.0,
                 duplicates_removed=clean_result.duplicates_removed,
                 invalid_removed=clean_result.invalid_removed,
+                saved_with_warnings=clean_result.saved_with_warnings,
                 rejected_rows_detailed=rejected_detailed,
                 rejected_rows_with_revenue_count=rejected_with_revenue,
                 rejected_revenue_excluded=rejected_rev_total,
@@ -470,17 +781,31 @@ def execute_upload(
 
         # ── Steps 4-6: Write to DB atomically ────────────────────────────────
         with get_db() as db:
+            # If replacing an existing upload, remove previous UploadLog and cascaded rows
+            if file_hash and replace_existing:
+                old_logs = (
+                    db.query(UploadLog)
+                    .filter(UploadLog.tenant_id == tenant_id, UploadLog.file_hash == file_hash)
+                    .all()
+                )
+                for old_log in old_logs:
+                    db.delete(old_log)
+                db.flush()
+
             # Create the UploadLog record
             upload_log = UploadLog(
                 tenant_id=tenant_id,
                 filename=filename,
                 file_type=file_type,
+                file_hash=file_hash,
                 row_count_raw=raw_count,
                 row_count_clean=clean_result.clean_count,
-                status="success" if not clean_result.warnings else "partial",
+                rows_with_warnings=clean_result.saved_with_warnings,
+                status="success" if not (clean_result.warnings or clean_result.saved_with_warnings) else "partial",
                 notes="; ".join(clean_result.warnings) if clean_result.warnings else None,
             )
             db.add(upload_log)
+
 
             # db.flush() runs the INSERT and populates upload_log.id WITHOUT
             # committing. We need the ID to link Sales/Expenses rows to this log.
@@ -527,6 +852,7 @@ def execute_upload(
             clean_revenue=clean_result.clean_revenue,
             duplicates_removed=clean_result.duplicates_removed,
             invalid_removed=clean_result.invalid_removed,
+            saved_with_warnings=clean_result.saved_with_warnings,
             rejected_rows_detailed=rejected_detailed,
             rejected_rows_with_revenue_count=rejected_with_revenue,
             rejected_revenue_excluded=rejected_rev_total,
@@ -569,3 +895,261 @@ def execute_upload(
                 "Please try again or contact support."
             ),
         )
+
+
+def execute_cashbook_upload(
+    raw_df: pd.DataFrame,
+    filename: str,
+    tenant_id: str,
+    file_hash: Optional[str] = None,
+    replace_existing: bool = False,
+) -> UploadResult:
+    """
+    Execute an upload for a cash-book file by splitting it into sales and expenses.
+
+    Atomically saves both halves under the tenant_id, linking them to separate UploadLog entries.
+    """
+    init_db()
+
+    # 1. Duplicate check across cash-book logs
+    if file_hash:
+        with get_db() as db:
+            existing = (
+                db.query(UploadLog)
+                .filter(
+                    UploadLog.tenant_id == tenant_id,
+                    UploadLog.file_hash.in_([file_hash, f"{file_hash}:sales", f"{file_hash}:expenses"])
+                )
+                .first()
+            )
+            if existing and not replace_existing:
+                return UploadResult(
+                    success=False,
+                    upload_log_id=None,
+                    filename=filename,
+                    file_type="cashbook",
+                    raw_count=len(raw_df),
+                    clean_count=0,
+                    raw_revenue=0.0,
+                    clean_revenue=0.0,
+                    duplicates_removed=0,
+                    invalid_removed=0,
+                    is_duplicate=True,
+                    existing_upload_id=existing.id,
+                    error_message=(
+                        f"This cash-book has already been imported on {existing.uploaded_at.strftime('%d %b %Y')} "
+                        f"as '{existing.filename}'. You can skip it or replace the previous import."
+                    ),
+                    is_cashbook=True,
+                )
+
+    # 2. If replace_existing, clean up old logs for this file_hash
+    if file_hash and replace_existing:
+        with get_db() as db:
+            old_logs = (
+                db.query(UploadLog)
+                .filter(
+                    UploadLog.tenant_id == tenant_id,
+                    UploadLog.file_hash.in_([file_hash, f"{file_hash}:sales", f"{file_hash}:expenses"])
+                )
+                .all()
+            )
+            for old_log in old_logs:
+                db.delete(old_log)
+            db.commit()
+
+    # 3. Split the cash-book
+    split_res = split_cashbook(raw_df)
+    if split_res.sales_count == 0 and split_res.expenses_count == 0:
+        return UploadResult(
+            success=False,
+            upload_log_id=None,
+            filename=filename,
+            file_type="cashbook",
+            raw_count=len(raw_df),
+            clean_count=0,
+            raw_revenue=0.0,
+            clean_revenue=0.0,
+            duplicates_removed=0,
+            invalid_removed=0,
+            error_message="Could not find any valid sales or expense rows to import from this cash-book.",
+            is_cashbook=True,
+        )
+
+    # 4. Execute sales portion
+    sales_res = None
+    if split_res.sales_count > 0:
+        sales_res = execute_upload(
+            raw_df=split_res.sales_df,
+            confirmed_mapping={"date": "date", "product": "product", "revenue": "revenue"},
+            file_type="sales",
+            filename=f"{filename} (Sales)",
+            tenant_id=tenant_id,
+            file_hash=f"{file_hash}:sales" if file_hash else None,
+            replace_existing=False,
+        )
+        if not sales_res.success:
+            return sales_res
+
+    # 5. Execute expenses portion
+    expenses_res = None
+    if split_res.expenses_count > 0:
+        expenses_res = execute_upload(
+            raw_df=split_res.expenses_df,
+            confirmed_mapping={"date": "date", "category": "category", "amount": "amount"},
+            file_type="expenses",
+            filename=f"{filename} (Expenses)",
+            tenant_id=tenant_id,
+            file_hash=f"{file_hash}:expenses" if file_hash else None,
+            replace_existing=False,
+        )
+        if not expenses_res.success:
+            return expenses_res
+
+    # 6. Combine results
+    clean_count = (sales_res.clean_count if sales_res else 0) + (expenses_res.clean_count if expenses_res else 0)
+    raw_rev = sales_res.raw_revenue if sales_res else 0.0
+    clean_rev = sales_res.clean_revenue if sales_res else 0.0
+    dupes = (sales_res.duplicates_removed if sales_res else 0) + (expenses_res.duplicates_removed if expenses_res else 0)
+    invalids = (sales_res.invalid_removed if sales_res else 0) + (expenses_res.invalid_removed if expenses_res else 0)
+    saved_with_warnings = (sales_res.saved_with_warnings if sales_res else 0) + (expenses_res.saved_with_warnings if expenses_res else 0)
+    rejected = (sales_res.rejected_rows_detailed if sales_res else []) + (expenses_res.rejected_rows_detailed if expenses_res else [])
+    warnings = (sales_res.warnings if sales_res else []) + (expenses_res.warnings if expenses_res else [])
+
+    return UploadResult(
+        success=True,
+        upload_log_id=sales_res.upload_log_id if sales_res else expenses_res.upload_log_id,
+        filename=filename,
+        file_type="cashbook",
+        raw_count=len(raw_df),
+        clean_count=clean_count,
+        raw_revenue=raw_rev,
+        clean_revenue=clean_rev,
+        duplicates_removed=dupes,
+        invalid_removed=invalids,
+        saved_with_warnings=saved_with_warnings,
+        rejected_rows_detailed=rejected,
+        warnings=warnings,
+        is_cashbook=True,
+        cashbook_summary=split_res.summary_message,
+        sales_upload_id=sales_res.upload_log_id if sales_res else None,
+        expenses_upload_id=expenses_res.upload_log_id if expenses_res else None,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3.1: Import History & Audit Rollback
+# ─────────────────────────────────────────────────────────────────────────────
+def get_upload_history(tenant_id: str) -> list[dict]:
+    """
+    Return all imports for this tenant ordered from newest to oldest.
+    Includes counts of rows saved and rows skipped.
+    """
+    init_db()
+    with get_db() as db:
+        logs = (
+            db.query(UploadLog)
+            .filter(UploadLog.tenant_id == tenant_id)
+            .order_by(UploadLog.uploaded_at.desc())
+            .all()
+        )
+        results = []
+        for log in logs:
+            rejected_count = (
+                db.query(func.count(RejectedRow.id))
+                .filter(RejectedRow.upload_id == log.id, RejectedRow.tenant_id == tenant_id)
+                .scalar()
+                or 0
+            )
+            results.append({
+                "id": log.id,
+                "filename": log.filename,
+                "file_type": log.file_type,
+                "uploaded_at": log.uploaded_at.isoformat() if log.uploaded_at else None,
+                "rows_raw": log.row_count_raw or 0,
+                "rows_saved": log.row_count_clean or 0,
+                "rows_skipped": rejected_count,
+                "rows_with_warnings": getattr(log, "rows_with_warnings", 0) or 0,
+                "status": log.status or "success",
+                "notes": log.notes,
+                "has_rejected_rows": rejected_count > 0,
+            })
+        return results
+
+
+def get_upload_rejected_rows(tenant_id: str, upload_id: int) -> list[dict]:
+    """
+    Return stored skipped/rejected rows with reasons for an upload owned by the tenant.
+    """
+    init_db()
+    import json
+    with get_db() as db:
+        log = (
+            db.query(UploadLog)
+            .filter(UploadLog.id == upload_id, UploadLog.tenant_id == tenant_id)
+            .first()
+        )
+        if not log:
+            raise ValueError(f"Upload record #{upload_id} not found.")
+
+        rows = (
+            db.query(RejectedRow)
+            .filter(RejectedRow.upload_id == upload_id, RejectedRow.tenant_id == tenant_id)
+            .order_by(RejectedRow.id.asc())
+            .all()
+        )
+        results = []
+        for r in rows:
+            try:
+                parsed_data = json.loads(r.row_data) if r.row_data else {}
+            except Exception:
+                parsed_data = {"raw": r.row_data}
+            results.append({
+                "id": r.id,
+                "upload_id": r.upload_id,
+                "reason": r.reason,
+                "row_data": parsed_data,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+        return results
+
+
+def undo_upload(tenant_id: str, upload_id: int) -> dict:
+    """
+    Safely and atomically deletes an upload and all associated sales, expenses,
+    and rejected rows.
+    """
+    init_db()
+    with get_db() as db:
+        log = (
+            db.query(UploadLog)
+            .filter(UploadLog.id == upload_id, UploadLog.tenant_id == tenant_id)
+            .first()
+        )
+        if not log:
+            raise ValueError(f"Upload record #{upload_id} not found.")
+
+        filename = log.filename
+        file_type = log.file_type
+        saved_count = log.row_count_clean or 0
+
+        # Delete dependent data rows
+        db.query(Sales).filter(Sales.upload_id == upload_id, Sales.tenant_id == tenant_id).delete(synchronize_session=False)
+        db.query(Expenses).filter(Expenses.upload_id == upload_id, Expenses.tenant_id == tenant_id).delete(synchronize_session=False)
+        db.query(RejectedRow).filter(RejectedRow.upload_id == upload_id, RejectedRow.tenant_id == tenant_id).delete(synchronize_session=False)
+
+        # Delete upload log
+        db.delete(log)
+        db.commit()
+
+        logger.info("Upload #%d (%s) rolled back for tenant=%s", upload_id, filename, tenant_id)
+
+        return {
+            "success": True,
+            "deleted_upload_id": upload_id,
+            "filename": filename,
+            "rows_removed": saved_count,
+            "message": f"Successfully deleted import '{filename}' and all its associated data.",
+        }
+
+

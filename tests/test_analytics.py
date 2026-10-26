@@ -16,6 +16,8 @@ from db.database import get_db, init_db
 from db.models import Sales, Expenses, UploadLog
 from services.analytics_service import (
     get_available_months,
+    get_month_data_availability,
+    get_complete_months,
     compare_periods,
     detect_anomalies,
     diagnose_profit_drop,
@@ -203,6 +205,29 @@ class TestAnalyticsService:
         assert len(drops) >= 1
         assert drops[0].actual_value == 10.0
 
+    def test_detect_expense_anomalies_includes_descriptions(self):
+        with get_db() as db:
+            ul = UploadLog(tenant_id=TENANT, filename="test_exp.csv", file_type="expenses", row_count_raw=10, row_count_clean=10)
+            db.add(ul)
+            db.flush()
+
+            # Normal expense days
+            for d in range(1, 10):
+                db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 5, d), category="Supplies", description="Daily milk", amount=50.0))
+
+            # Major expense spike on day 10
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 5, 10), category="Equipment", description="New Espresso Machine", amount=2500.0))
+            db.commit()
+
+        report = detect_anomalies(TENANT, sensitivity=2.0)
+        assert len(report.expense_anomalies) >= 1
+        spike = report.expense_anomalies[0]
+        assert "New Espresso Machine" in spike.description
+        assert len(spike.expense_details) >= 1
+        assert spike.expense_details[0]["description"] == "New Espresso Machine"
+        assert spike.expense_details[0]["category"] == "Equipment"
+        assert spike.expense_details[0]["amount"] == 2500.0
+
     def test_diagnose_profit_growth(self):
         with get_db() as db:
             ul = UploadLog(tenant_id=TENANT, filename="test.csv", file_type="sales", row_count_raw=4, row_count_clean=4)
@@ -224,4 +249,83 @@ class TestAnalyticsService:
         assert diag.profit_change == 600.0
         assert "Expansion" in diag.primary_driver or "Growth" in diag.primary_driver
         assert len(diag.key_insights) > 0
+
+    def test_month_availability_and_complete_months(self):
+        with get_db() as db:
+            ul = UploadLog(tenant_id=TENANT, filename="test.csv", file_type="sales", row_count_raw=3, row_count_clean=3)
+            db.add(ul)
+            db.flush()
+            # Jan 2024: sales only
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 1, 10), product="A", revenue=100))
+            # Feb 2024: expenses only
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 2, 10), category="Rent", amount=100))
+            # Mar 2024: both
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 3, 10), product="A", revenue=200))
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 3, 10), category="Rent", amount=50))
+            db.commit()
+
+        avail = get_month_data_availability(TENANT)
+        assert avail["2024-01"] == {"has_sales": True, "has_expenses": False, "has_both": False}
+        assert avail["2024-02"] == {"has_sales": False, "has_expenses": True, "has_both": False}
+        assert avail["2024-03"] == {"has_sales": True, "has_expenses": True, "has_both": True}
+
+        complete = get_complete_months(TENANT)
+        assert complete == ["2024-03"]
+
+    def test_compare_periods_rejects_invalid_month_format(self):
+        with pytest.raises(ValueError, match="Invalid month format"):
+            compare_periods(TENANT, current_month="2024-13")
+
+        with pytest.raises(ValueError, match="Invalid month format"):
+            compare_periods(TENANT, current_month="invalid")
+
+    def test_compare_periods_rejects_month_with_only_sales(self):
+        with get_db() as db:
+            ul = UploadLog(tenant_id=TENANT, filename="test.csv", file_type="sales", row_count_raw=3, row_count_clean=3)
+            db.add(ul)
+            db.flush()
+            # Jan: sales only
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 1, 10), product="A", revenue=100))
+            # Feb: both
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 2, 10), product="A", revenue=200))
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 2, 10), category="Rent", amount=50))
+            db.commit()
+
+        with pytest.raises(ValueError, match="only has sales data"):
+            compare_periods(TENANT, current_month="2024-02", prior_month="2024-01")
+
+    def test_compare_periods_rejects_month_with_only_expenses(self):
+        with get_db() as db:
+            ul = UploadLog(tenant_id=TENANT, filename="test.csv", file_type="expenses", row_count_raw=3, row_count_clean=3)
+            db.add(ul)
+            db.flush()
+            # Jan: expenses only
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 1, 10), category="Rent", amount=100))
+            # Feb: both
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 2, 10), product="A", revenue=200))
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 2, 10), category="Rent", amount=50))
+            db.commit()
+
+        with pytest.raises(ValueError, match="only has expense data"):
+            compare_periods(TENANT, current_month="2024-02", prior_month="2024-01")
+
+    def test_compare_periods_auto_selects_only_complete_months(self):
+        with get_db() as db:
+            ul = UploadLog(tenant_id=TENANT, filename="test.csv", file_type="sales", row_count_raw=5, row_count_clean=5)
+            db.add(ul)
+            db.flush()
+            # Jan: sales only
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 1, 10), product="A", revenue=100))
+            # Feb: both
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 2, 10), product="A", revenue=200))
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 2, 10), category="Rent", amount=50))
+            # Mar: both
+            db.add(Sales(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 3, 10), product="A", revenue=300))
+            db.add(Expenses(tenant_id=TENANT, upload_id=ul.id, date=date(2024, 3, 10), category="Rent", amount=70))
+            db.commit()
+
+        comp = compare_periods(TENANT)
+        assert comp is not None
+        assert comp.current.period_label == "2024-03"
+        assert comp.prior.period_label == "2024-02"
 

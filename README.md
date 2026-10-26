@@ -15,7 +15,7 @@ BizIntel is a local business-intelligence app for small businesses such as cafes
 You need Python 3.11+, Node.js 20+, npm, and [Ollama](https://ollama.com/) for the Ask AI feature.
 
 ```bash
-cd "/Users/rudrayadav/Downloads/Rudra File's/Final Year Project"
+cd BizIntel
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

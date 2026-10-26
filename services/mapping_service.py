@@ -177,7 +177,9 @@ class ColumnMapping:
     def missing_required(self) -> list[str]:
         """Required standard fields that have no raw column mapped to them."""
         required = (
-            SALES_REQUIRED if self.file_type == "sales" else EXPENSES_REQUIRED
+            SALES_REQUIRED if self.file_type == "sales"
+            else EXPENSES_REQUIRED if self.file_type == "expenses"
+            else []
         )
         return [r for r in required if r not in self.mapped_standard]
 
@@ -432,6 +434,79 @@ def suggest_mapping(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Public: validate confirmed mapping
+# ─────────────────────────────────────────────────────────────────────────────
+def validate_confirmed_mapping(
+    confirmed_mapping: dict[str, str],
+    file_type: str,
+    raw_columns: list[str],
+) -> None:
+    """
+    Validate the owner's confirmed column mapping on the server side.
+
+    Guarantees:
+      1. file_type is valid ('sales' or 'expenses')
+      2. All mapped raw columns exist in the uploaded file
+      3. All assigned target fields are allowed standard fields for that file_type
+      4. No two raw columns map to the same target field (no duplicate targets)
+      5. All required standard fields for the file_type are present
+
+    Raises:
+        ValueError with a friendly, plain-language explanation on any rule violation.
+    """
+    norm_type = file_type.strip().lower()
+    if norm_type not in ("sales", "expenses"):
+        raise ValueError(f"Invalid file type '{file_type}'. Expected 'sales' or 'expenses'.")
+
+    allowed_targets = STANDARD_COLUMNS[norm_type]
+    required_targets = SALES_REQUIRED if norm_type == "sales" else EXPENSES_REQUIRED
+
+    # Keep only active mappings where user selected a non-empty target
+    active_mapping = {
+        raw: target.strip().lower()
+        for raw, target in confirmed_mapping.items()
+        if target and str(target).strip()
+    }
+
+    if not active_mapping:
+        raise ValueError("No columns were mapped. Please map at least the required columns.")
+
+    # 1. Raw columns must exist in the file
+    for raw in active_mapping:
+        if raw not in raw_columns:
+            raise ValueError(f"Column '{raw}' in mapping does not exist in the uploaded file.")
+
+    # 2. Target fields must be valid standard fields for this file type
+    for raw, target in active_mapping.items():
+        if target not in allowed_targets:
+            raise ValueError(
+                f"Field '{target}' is not an allowed standard field for {norm_type} files. "
+                f"Allowed fields: {', '.join(allowed_targets)}."
+            )
+
+    # 3. Duplicate target check: No two columns may map to the same standard field
+    target_counts: dict[str, int] = {}
+    for target in active_mapping.values():
+        target_counts[target] = target_counts.get(target, 0) + 1
+
+    duplicates = [tgt for tgt, count in target_counts.items() if count > 1]
+    if duplicates:
+        raise ValueError(
+            f"Multiple columns were mapped to the same field: {', '.join(duplicates)}. "
+            f"Each standard field can only be mapped to one column."
+        )
+
+    # 4. Required fields check: All required fields must be mapped
+    mapped_targets = set(active_mapping.values())
+    missing = [req for req in required_targets if req not in mapped_targets]
+    if missing:
+        raise ValueError(
+            f"Missing required field(s): {', '.join(missing)}. "
+            f"Please map all required fields before proceeding."
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public: apply confirmed mapping to a DataFrame
 # ─────────────────────────────────────────────────────────────────────────────
 def apply_mapping(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
@@ -466,3 +541,4 @@ def apply_mapping(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
         )
 
     return df[list(valid_mapping.keys())].rename(columns=valid_mapping).copy()
+
