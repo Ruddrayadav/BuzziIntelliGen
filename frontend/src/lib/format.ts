@@ -3,7 +3,10 @@ export function money(value: number) {
   return `${value < 0 ? "-" : ""}₹${formatted}`;
 }
 
-export function signedPercent(value: number) {
+export function signedPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "new";
+  }
   return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
 }
 

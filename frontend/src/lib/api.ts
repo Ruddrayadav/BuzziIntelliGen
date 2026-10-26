@@ -158,13 +158,13 @@ export type PeriodComparison = {
   current: PeriodSummary;
   prior: PeriodSummary;
   revenue_delta: number;
-  revenue_delta_pct: number;
+  revenue_delta_pct: number | null;
   expense_delta: number;
-  expense_delta_pct: number;
+  expense_delta_pct: number | null;
   profit_delta: number;
-  profit_delta_pct: number;
+  profit_delta_pct: number | null;
   aov_delta: number;
-  aov_delta_pct: number;
+  aov_delta_pct: number | null;
   margin_delta_pct: number;
   product_shifts: Array<Record<string, unknown>>;
   expense_shifts: Array<Record<string, unknown>>;

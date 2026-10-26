@@ -53,13 +53,13 @@ class PeriodComparison:
     
     # Deltas (Current - Prior)
     revenue_delta: float = 0.0
-    revenue_delta_pct: float = 0.0
+    revenue_delta_pct: Optional[float] = None
     expense_delta: float = 0.0
-    expense_delta_pct: float = 0.0
+    expense_delta_pct: Optional[float] = None
     profit_delta: float = 0.0
-    profit_delta_pct: float = 0.0
+    profit_delta_pct: Optional[float] = None
     aov_delta: float = 0.0
-    aov_delta_pct: float = 0.0
+    aov_delta_pct: Optional[float] = None
     margin_delta_pct: float = 0.0
     
     # Product & Expense Shifts
@@ -77,11 +77,11 @@ class Anomaly:
     actual_value: float
     expected_value: float
     deviation: float      # actual - expected
-    deviation_pct: float  # percentage above/below expected
-    z_score: float
-    anomaly_type: str     # "spike" or "drop"
-    severity: str         # "critical", "warning", "info"
-    description: str
+    deviation_pct: Optional[float] = None  # percentage above/below expected
+    z_score: float = 0.0
+    anomaly_type: str = "spike"     # "spike" or "drop"
+    severity: str = "info"         # "critical", "warning", "info"
+    description: str = ""
     expense_details: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -102,7 +102,7 @@ class ProfitDiagnosis:
     prior_profit: float
     current_profit: float
     profit_change: float
-    profit_change_pct: float
+    profit_change_pct: Optional[float]
     is_profit_down: bool
     primary_driver: str
     revenue_impact: float
@@ -118,13 +118,22 @@ class ProfitDiagnosis:
 # 2. Helper Functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _calc_pct_change(current: float, prior: float) -> float:
-    """Safely calculate percentage change without ZeroDivisionError."""
-    if prior == 0.0:
-        if current == 0.0:
+def _calc_pct_change(current: Optional[float], prior: Optional[float]) -> Optional[float]:
+    """
+    Safely calculate percentage change.
+    Returns None when the previous value is 0 or missing (representing a new item).
+    """
+    if prior is None or pd.isna(prior):
+        return None
+    if current is None or pd.isna(current):
+        return None
+    prior_f = float(prior)
+    curr_f = float(current)
+    if prior_f == 0.0:
+        if curr_f == 0.0:
             return 0.0
-        return 100.0 if current > 0 else -100.0
-    return round(((current - prior) / abs(prior)) * 100.0, 2)
+        return None
+    return round(((curr_f - prior_f) / abs(prior_f)) * 100.0, 2)
 
 
 def get_month_data_availability(tenant_id: str) -> Dict[str, Dict[str, bool]]:
@@ -381,6 +390,7 @@ def compare_periods(
     top_decliners = []
     if not product_shifts_df.empty:
         product_shifts_df = product_shifts_df.sort_values("delta", ascending=False)
+        product_shifts_df["delta_pct"] = product_shifts_df["delta_pct"].astype(object).where(product_shifts_df["delta_pct"].notnull(), None)
         top_gainers = product_shifts_df[product_shifts_df["delta"] > 0].head(5).to_dict("records")
         top_decliners = product_shifts_df[product_shifts_df["delta"] < 0].sort_values("delta", ascending=True).head(5).to_dict("records")
 
@@ -407,6 +417,7 @@ def compare_periods(
     expense_shifts_df = pd.DataFrame(e_shifts_list)
     if not expense_shifts_df.empty:
         expense_shifts_df = expense_shifts_df.sort_values("delta", ascending=False)
+        expense_shifts_df["delta_pct"] = expense_shifts_df["delta_pct"].astype(object).where(expense_shifts_df["delta_pct"].notnull(), None)
 
     return PeriodComparison(
         current=curr_summary,
@@ -508,10 +519,11 @@ def detect_anomalies(
                 else:
                     severity = "info"
                     
+                dev_str = f"{dev_pct:+.1f}%" if dev_pct is not None else "new"
                 if anomaly_type == "spike":
-                    desc = f"Revenue surged to ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f})"
+                    desc = f"Revenue surged to ₹{actual:,.2f} ({dev_str} vs expected ₹{expected:,.2f})"
                 else:
-                    desc = f"Revenue plunged to ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f})"
+                    desc = f"Revenue plunged to ₹{actual:,.2f} ({dev_str} vs expected ₹{expected:,.2f})"
 
                 rev_anomalies.append(Anomaly(
                     date=row["date"],
@@ -577,7 +589,8 @@ def detect_anomalies(
                     else:
                         top_item_desc = f": {largest['category']} (₹{largest['amount']:,.2f})"
 
-                desc = f"Expense spike of ₹{actual:,.2f} ({dev_pct:+.1f}% vs expected ₹{expected:,.2f}){top_item_desc}"
+                dev_str = f"{dev_pct:+.1f}%" if dev_pct is not None else "new"
+                desc = f"Expense spike of ₹{actual:,.2f} ({dev_str} vs expected ₹{expected:,.2f}){top_item_desc}"
                 
                 exp_anomalies.append(Anomaly(
                     date=row["date"],
@@ -687,23 +700,26 @@ def diagnose_profit_drop(
     key_insights: List[str] = []
     recommendations: List[str] = []
 
+    def _fmt_p(p: Optional[float]) -> str:
+        return "new" if p is None or pd.isna(p) else f"{float(p):+.1f}%"
+
     if is_down:
         key_insights.append(
-            f"Net Profit declined by ₹{abs(profit_change):,.2f} ({profit_change_pct:+.1f}%) from {comp.prior.period_label} to {comp.current.period_label}."
+            f"Net Profit declined by ₹{abs(profit_change):,.2f} ({_fmt_p(profit_change_pct)}) from {comp.prior.period_label} to {comp.current.period_label}."
         )
         if comp.revenue_delta < 0:
             key_insights.append(
-                f"Revenue drop contributed ₹{abs(comp.revenue_delta):,.2f} ({comp.revenue_delta_pct:+.1f}%) to the deficit."
+                f"Revenue drop contributed ₹{abs(comp.revenue_delta):,.2f} ({_fmt_p(comp.revenue_delta_pct)}) to the deficit."
             )
         if comp.expense_delta > 0:
             key_insights.append(
-                f"Expense increase added an extra ₹{comp.expense_delta:,.2f} (+{comp.expense_delta_pct:+.1f}%) to operational costs."
+                f"Expense increase added an extra ₹{comp.expense_delta:,.2f} ({_fmt_p(comp.expense_delta_pct)}) to operational costs."
             )
             
         if top_drags:
             top_p = top_drags[0]
             key_insights.append(
-                f"Major revenue drag: '{top_p['product']}' dropped by ₹{top_p['drop_amount']:,.2f} ({top_p['pct_change']:+.1f}%)."
+                f"Major revenue drag: '{top_p['product']}' dropped by ₹{top_p['drop_amount']:,.2f} ({_fmt_p(top_p['pct_change'])})."
             )
             recommendations.append(
                 f"Review inventory, customer demand, or promotional pricing for '{top_p['product']}' to recover sales."
@@ -712,7 +728,7 @@ def diagnose_profit_drop(
         if top_surges:
             top_e = top_surges[0]
             key_insights.append(
-                f"Highest cost spike: '{top_e['category']}' jumped by ₹{top_e['increase_amount']:,.2f} ({top_e['pct_change']:+.1f}%)."
+                f"Highest cost spike: '{top_e['category']}' jumped by ₹{top_e['increase_amount']:,.2f} ({_fmt_p(top_e['pct_change'])})."
             )
             recommendations.append(
                 f"Audit vendor invoices and recurring contracts for '{top_e['category']}' to trim unnecessary costs."
@@ -724,12 +740,12 @@ def diagnose_profit_drop(
             )
     else:
         key_insights.append(
-            f"Net Profit grew by ₹{profit_change:,.2f} ({profit_change_pct:+.1f}%) from {comp.prior.period_label} to {comp.current.period_label}."
+            f"Net Profit grew by ₹{profit_change:,.2f} ({_fmt_p(profit_change_pct)}) from {comp.prior.period_label} to {comp.current.period_label}."
         )
         if comp.revenue_delta > 0:
-            key_insights.append(f"Revenue expanded by ₹{comp.revenue_delta:,.2f} ({comp.revenue_delta_pct:+.1f}%).")
+            key_insights.append(f"Revenue expanded by ₹{comp.revenue_delta:,.2f} ({_fmt_p(comp.revenue_delta_pct)}).")
         if comp.expense_delta < 0:
-            key_insights.append(f"Operating expenses decreased by ₹{abs(comp.expense_delta):,.2f} ({comp.expense_delta_pct:+.1f}%).")
+            key_insights.append(f"Operating expenses decreased by ₹{abs(comp.expense_delta):,.2f} ({_fmt_p(comp.expense_delta_pct)}).")
         recommendations.append("Continue current marketing momentum and maintain cost controls on overhead.")
 
     # 5. Build Waterfall Chart Data

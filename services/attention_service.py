@@ -95,6 +95,8 @@ def check_expense_faster_than_revenue(tenant_id: str) -> Optional[AttentionItem]
             return None
 
         rev_growth = comp.revenue_delta_pct
+        rev_growth_val = float(rev_growth) if rev_growth is not None else 0.0
+        rev_growth_str = f"{rev_growth:+.1f}%" if rev_growth is not None else "new"
         worst_category = None
         max_gap = 0.0
         worst_cat_growth = 0.0
@@ -114,8 +116,8 @@ def check_expense_faster_than_revenue(tenant_id: str) -> Optional[AttentionItem]
             cat_amount = float(shift.get("current_amount", 0.0))
             change = float(raw_change or 0.0)
 
-            if change > 0 and (cat_growth - rev_growth) > 10.0:
-                gap = cat_growth - rev_growth
+            if change > 0 and (cat_growth - rev_growth_val) > 10.0:
+                gap = cat_growth - rev_growth_val
                 if gap > max_gap:
                     max_gap = gap
                     worst_category = cat
@@ -130,7 +132,7 @@ def check_expense_faster_than_revenue(tenant_id: str) -> Optional[AttentionItem]
                 title=f"'{worst_category}' Costs Outpacing Revenue",
                 message=(
                     f"'{worst_category}' expenses jumped {worst_cat_growth:+.1f}% (to ₹{worst_cat_amount:,.2f}), "
-                    f"outpacing your revenue growth of {rev_growth:+.1f}%."
+                    f"outpacing your revenue growth of {rev_growth_str}."
                 ),
                 severity=severity,
                 action_tab="comparison",
@@ -182,12 +184,13 @@ def check_biggest_expense_jump(tenant_id: str) -> Optional[AttentionItem]:
         severity = "warning" if jump_amt >= 1000.0 else "info"
         score = 65.0 + min(25.0, jump_amt / 100.0)
 
+        jump_pct_str = f"{jump_pct:+.1f}% vs prior month" if top_surge.get("delta_pct") is not None else "new category"
         return AttentionItem(
             id=f"expense_surge_{cat.lower().replace(' ', '_')}",
             title=f"Cost Surge in '{cat}'",
             message=(
                 f"'{cat}' had the largest cost increase this period, surging by +₹{jump_amt:,.2f} "
-                f"({jump_pct:+.1f}% vs prior month)."
+                f"({jump_pct_str})."
             ),
             severity=severity,
             action_tab="comparison",

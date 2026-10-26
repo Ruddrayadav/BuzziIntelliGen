@@ -630,6 +630,14 @@ function Compare({
         <p className="text-xs text-muted mt-1">Detailed period-over-period variance for all catalog items.</p>
         <Details rows={comparison.product_shifts} />
       </Card>
+
+      {comparison.expense_shifts && comparison.expense_shifts.length > 0 && (
+        <Card className="p-6">
+          <h3 className="font-semibold text-base">All expense shifts</h3>
+          <p className="text-xs text-muted mt-1">Detailed period-over-period variance for all expense categories.</p>
+          <Details rows={comparison.expense_shifts} />
+        </Card>
+      )}
     </div>
   );
 }
@@ -776,10 +784,11 @@ function KpiCard({
   periodLabel?: string;
   currentValue: string;
   allTimeValue: string;
-  delta?: number;
+  delta?: number | null;
   priorPeriodLabel?: string;
   invertDelta?: boolean;
 }) {
+  const hasNoPrior = !priorPeriodLabel || priorPeriodLabel === "None";
   return (
     <Card className="flex flex-col justify-between p-4 sm:p-5">
       <div>
@@ -796,12 +805,12 @@ function KpiCard({
           )}
         </div>
         <p className="mt-2 text-2xl font-bold tracking-tight">{currentValue}</p>
-        {delta === undefined ? (
-          <p className="mt-2 text-xs text-muted">No earlier month to compare.</p>
+        {hasNoPrior || delta === undefined ? (
+          <p className="mt-2 text-xs text-muted">no earlier data</p>
         ) : (
           <p className="mt-2 text-xs">
             <Delta value={delta} invert={invertDelta} />
-            <span className="ml-1 text-muted">vs {priorPeriodLabel ?? "earlier"}</span>
+            <span className="ml-1 text-muted">vs {priorPeriodLabel}</span>
           </p>
         )}
       </div>
@@ -840,7 +849,14 @@ function SimpleKpiCard({
   );
 }
 
-function Delta({ value, invert = false }: { value: number; invert?: boolean }) {
+function Delta({ value, invert = false }: { value: number | null | undefined; invert?: boolean }) {
+  if (value === null || value === undefined) {
+    return (
+      <span className="inline-flex items-center gap-1 font-semibold text-blue-600 bg-blue-50 dark:bg-blue-950/40 px-1.5 py-0.5 rounded text-xs">
+        new
+      </span>
+    );
+  }
   const isPositive = value > 0;
   const isNegative = value < 0;
   const isGood = invert ? isNegative : isPositive;
@@ -909,9 +925,20 @@ function Details({ rows }: { rows: Array<Record<string, unknown>> }) {
           <tbody>
             {rows.map((row, index) => (
               <tr key={index} className="border-t border-slate-100 dark:border-slate-800">
-                {columns.map((column) => (
-                  <td key={column} className="px-2 py-1.5">{String(row[column] ?? "—")}</td>
-                ))}
+                {columns.map((column) => {
+                  const val = row[column];
+                  let displayVal = String(val ?? "—");
+                  if (column.toLowerCase().includes("pct") || column.toLowerCase().includes("percent")) {
+                    if (val === null || val === undefined) {
+                      displayVal = "new";
+                    } else if (typeof val === "number") {
+                      displayVal = signedPercent(val);
+                    }
+                  }
+                  return (
+                    <td key={column} className="px-2 py-1.5">{displayVal}</td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

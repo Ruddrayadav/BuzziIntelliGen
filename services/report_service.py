@@ -58,7 +58,7 @@ def _fmt_curr(val: Optional[float]) -> str:
 
 def _fmt_pct(val: Optional[float], show_sign: bool = True) -> str:
     if val is None or pd.isna(val):
-        return "N/A"
+        return "new"
     sign = "+" if show_sign and val > 0 else ""
     return f"{sign}{float(val):.1f}%"
 
@@ -310,11 +310,11 @@ def generate_monthly_pdf_report(
         f"(net profit margin: <b>{margin_pct:.1f}%</b>; Average Order Value: <b>{_fmt_curr(dash.average_order_value)}</b>)."
     ]
 
-    if comparison_data:
+    if comparison_data and comparison_data.prior.period_label != "None":
         rev_change = comparison_data.revenue_delta_pct
         prof_change = comparison_data.profit_delta_pct
-        rev_trend = f"{'+' if rev_change > 0 else ''}{rev_change:.1f}%"
-        prof_trend = f"{'+' if prof_change > 0 else ''}{prof_change:.1f}%"
+        rev_trend = _fmt_pct(rev_change)
+        prof_trend = _fmt_pct(prof_change)
         exec_sentences.append(
             f"Compared to {comparison_data.prior.period_label}, monthly revenue shifted by <b>{rev_trend}</b> "
             f"and net profit changed by <b>{prof_trend}</b>."
@@ -345,18 +345,19 @@ def generate_monthly_pdf_report(
     elements.append(Paragraph("1. Core Financial Performance", section_heading_style))
 
     kpi_headers = ["Key Financial Metric", f"{month_label} (Current)", "Prior Month", "MoM Delta"]
-    prior_rev = _fmt_curr(comparison_data.prior.revenue) if comparison_data else "—"
-    prior_exp = _fmt_curr(comparison_data.prior.expenses) if comparison_data else "—"
-    prior_profit = _fmt_curr(comparison_data.prior.net_profit) if comparison_data else "—"
-    prior_margin = f"{comparison_data.prior.profit_margin_pct:.1f}%" if comparison_data else "—"
-    prior_orders = _fmt_int(comparison_data.prior.order_count) if comparison_data else "—"
-    prior_aov = _fmt_curr(comparison_data.prior.average_order_value) if comparison_data else "—"
+    has_prior = bool(comparison_data and comparison_data.prior.period_label != "None")
+    prior_rev = _fmt_curr(comparison_data.prior.revenue) if has_prior else "—"
+    prior_exp = _fmt_curr(comparison_data.prior.expenses) if has_prior else "—"
+    prior_profit = _fmt_curr(comparison_data.prior.net_profit) if has_prior else "—"
+    prior_margin = f"{comparison_data.prior.profit_margin_pct:.1f}%" if has_prior else "—"
+    prior_orders = _fmt_int(comparison_data.prior.order_count) if has_prior else "—"
+    prior_aov = _fmt_curr(comparison_data.prior.average_order_value) if has_prior else "—"
 
-    rev_delta = _fmt_pct(comparison_data.revenue_delta_pct) if comparison_data else "—"
-    exp_delta = _fmt_pct(comparison_data.expense_delta_pct) if comparison_data else "—"
-    prof_delta = _fmt_pct(comparison_data.profit_delta_pct) if comparison_data else "—"
-    margin_delta = _fmt_pct(comparison_data.margin_delta_pct, show_sign=True) if comparison_data else "—"
-    aov_delta = _fmt_pct(comparison_data.aov_delta_pct) if comparison_data else "—"
+    rev_delta = _fmt_pct(comparison_data.revenue_delta_pct) if has_prior else "no earlier data"
+    exp_delta = _fmt_pct(comparison_data.expense_delta_pct) if has_prior else "no earlier data"
+    prof_delta = _fmt_pct(comparison_data.profit_delta_pct) if has_prior else "no earlier data"
+    margin_delta = _fmt_pct(comparison_data.margin_delta_pct, show_sign=True) if has_prior else "no earlier data"
+    aov_delta = _fmt_pct(comparison_data.aov_delta_pct) if has_prior else "no earlier data"
 
     kpi_rows = [
         kpi_headers,
@@ -464,18 +465,41 @@ def generate_monthly_pdf_report(
 
     exp_df = dash.expense_breakdown
     if isinstance(exp_df, pd.DataFrame) and not exp_df.empty:
-        exp_rows = [["Expense Category", "Total Spend (₹)", "Share of Operating Expenses"]]
-        for row in exp_df.head(6).itertuples():
-            c_name = getattr(row, "category", "General")
-            amt = getattr(row, "amount", 0.0)
-            pct = getattr(row, "percentage", 0.0)
-            exp_rows.append([
-                str(c_name),
-                _fmt_curr(amt),
-                f"{pct:.1f}%",
-            ])
+        shift_map = {}
+        if comparison_data and isinstance(comparison_data.expense_shifts, pd.DataFrame) and not comparison_data.expense_shifts.empty:
+            for _, srow in comparison_data.expense_shifts.iterrows():
+                shift_map[str(srow.get("category", "")).strip().lower()] = srow.get("delta_pct")
 
-        exp_table = Table(exp_rows, colWidths=[240, 150, 150])
+        has_shifts = bool(shift_map and comparison_data and comparison_data.prior.period_label != "None")
+        if has_shifts:
+            exp_rows = [["Expense Category", "Total Spend (₹)", "Share", "MoM Change"]]
+            for row in exp_df.head(6).itertuples():
+                c_name = getattr(row, "category", "General")
+                amt = getattr(row, "amount", 0.0)
+                pct = getattr(row, "percentage", 0.0)
+                d_pct = shift_map.get(str(c_name).strip().lower())
+                change_str = _fmt_pct(d_pct)
+                exp_rows.append([
+                    str(c_name),
+                    _fmt_curr(amt),
+                    f"{pct:.1f}%",
+                    change_str,
+                ])
+            col_widths = [200, 120, 110, 110]
+        else:
+            exp_rows = [["Expense Category", "Total Spend (₹)", "Share of Operating Expenses"]]
+            for row in exp_df.head(6).itertuples():
+                c_name = getattr(row, "category", "General")
+                amt = getattr(row, "amount", 0.0)
+                pct = getattr(row, "percentage", 0.0)
+                exp_rows.append([
+                    str(c_name),
+                    _fmt_curr(amt),
+                    f"{pct:.1f}%",
+                ])
+            col_widths = [240, 150, 150]
+
+        exp_table = Table(exp_rows, colWidths=col_widths)
         exp_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#475569")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),

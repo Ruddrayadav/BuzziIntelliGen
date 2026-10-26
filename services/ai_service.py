@@ -442,9 +442,11 @@ def _get_business_summary(
     try:
         comp = compare_periods(tenant_id)
         if comp and comp.prior.period_label != "None":
+            r_str = "new" if comp.revenue_delta_pct is None else f"{comp.revenue_delta_pct:+.1f}%"
+            p_str = "new" if comp.profit_delta_pct is None else f"{comp.profit_delta_pct:+.1f}%"
             mom_info = (
-                f"Revenue {comp.revenue_delta_pct:+.1f}% vs prior month, "
-                f"Profit {comp.profit_delta_pct:+.1f}%"
+                f"Revenue {r_str} vs prior month, "
+                f"Profit {p_str}"
             )
     except Exception:
         pass
@@ -485,17 +487,51 @@ def _get_period_comparison_table(tenant_id: str) -> Tuple[pd.DataFrame, str]:
         msg = "Need at least two months of data for period comparison."
         return pd.DataFrame([{"Message": msg}]), msg
 
+    def _fmt_pct_val(val: Optional[float]) -> str:
+        return "new" if val is None or pd.isna(val) else f"{float(val):+.1f}%"
+
     rows = [
-        {"Metric": "Revenue", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.revenue:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.revenue:,.2f}", "Change": f"₹{comp.revenue_delta:+,.2f}", "% Change": f"{comp.revenue_delta_pct:+.1f}%"},
-        {"Metric": "Expenses", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.expenses:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.expenses:,.2f}", "Change": f"₹{comp.expense_delta:+,.2f}", "% Change": f"{comp.expense_delta_pct:+.1f}%"},
-        {"Metric": "Net Profit", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.net_profit:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.net_profit:,.2f}", "Change": f"₹{comp.profit_delta:+,.2f}", "% Change": f"{comp.profit_delta_pct:+.1f}%"},
-        {"Metric": "Orders", f"Prior ({comp.prior.period_label})": comp.prior.order_count, f"Current ({comp.current.period_label})": comp.current.order_count, "Change": comp.current.order_count - comp.prior.order_count, "% Change": f"{((comp.current.order_count - comp.prior.order_count)/max(1, comp.prior.order_count)*100):+.1f}%"},
-        {"Metric": "Avg Order Value", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.average_order_value:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.average_order_value:,.2f}", "Change": f"₹{comp.aov_delta:+,.2f}", "% Change": f"{comp.aov_delta_pct:+.1f}%"},
+        {"Metric": "Revenue", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.revenue:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.revenue:,.2f}", "Change": f"₹{comp.revenue_delta:+,.2f}", "% Change": _fmt_pct_val(comp.revenue_delta_pct)},
+        {"Metric": "Expenses", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.expenses:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.expenses:,.2f}", "Change": f"₹{comp.expense_delta:+,.2f}", "% Change": _fmt_pct_val(comp.expense_delta_pct)},
+        {"Metric": "Net Profit", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.net_profit:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.net_profit:,.2f}", "Change": f"₹{comp.profit_delta:+,.2f}", "% Change": _fmt_pct_val(comp.profit_delta_pct)},
+        {"Metric": "Orders", f"Prior ({comp.prior.period_label})": str(comp.prior.order_count), f"Current ({comp.current.period_label})": str(comp.current.order_count), "Change": str(comp.current.order_count - comp.prior.order_count), "% Change": f"{((comp.current.order_count - comp.prior.order_count)/max(1, comp.prior.order_count)*100):+.1f}%"},
+        {"Metric": "Avg Order Value", f"Prior ({comp.prior.period_label})": f"₹{comp.prior.average_order_value:,.2f}", f"Current ({comp.current.period_label})": f"₹{comp.current.average_order_value:,.2f}", "Change": f"₹{comp.aov_delta:+,.2f}", "% Change": _fmt_pct_val(comp.aov_delta_pct)},
     ]
-    headline = (
+
+    # Include detailed expense category shifts so questions about category changes see them
+    if isinstance(comp.expense_shifts, pd.DataFrame) and not comp.expense_shifts.empty:
+        for _, es in comp.expense_shifts.iterrows():
+            cat = es.get("category", "")
+            p_amt = float(es.get("prior_amount", 0.0))
+            c_amt = float(es.get("current_amount", 0.0))
+            d_amt = float(es.get("delta", 0.0))
+            d_pct = es.get("delta_pct")
+            rows.append({
+                "Metric": f"Expense: {cat}",
+                f"Prior ({comp.prior.period_label})": f"₹{p_amt:,.2f}",
+                f"Current ({comp.current.period_label})": f"₹{c_amt:,.2f}",
+                "Change": f"₹{d_amt:+,.2f}",
+                "% Change": _fmt_pct_val(d_pct),
+            })
+
+    rev_change_str = _fmt_pct_val(comp.revenue_delta_pct)
+    profit_change_str = _fmt_pct_val(comp.profit_delta_pct)
+    headline_parts = [
         f"Compared to {comp.prior.period_label}, {comp.current.period_label} revenue changed by "
-        f"{comp.revenue_delta_pct:+.1f}% and profit changed by {comp.profit_delta_pct:+.1f}% (₹{comp.profit_delta:+,.2f})."
-    )
+        f"{rev_change_str} and profit changed by {profit_change_str} (₹{comp.profit_delta:+,.2f})."
+    ]
+    if isinstance(comp.expense_shifts, pd.DataFrame) and not comp.expense_shifts.empty:
+        highlights = []
+        for _, es in comp.expense_shifts.iterrows():
+            c = es.get("category", "")
+            dp = es.get("delta_pct")
+            if dp is None:
+                highlights.append(f"{c} is new")
+            elif abs(float(dp)) > 0:
+                highlights.append(f"{c} {float(dp):+.1f}%")
+        if highlights:
+            headline_parts.append(f"Expense shifts: {', '.join(highlights[:3])}.")
+    headline = " ".join(headline_parts)
     return pd.DataFrame(rows), headline
 
 
