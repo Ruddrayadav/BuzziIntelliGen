@@ -187,6 +187,11 @@ export function HistoryPage() {
                         <span className="font-semibold text-emerald-600 dark:text-emerald-400">
                           {item.rows_saved.toLocaleString()} rows
                         </span>
+                        {Boolean(item.rows_with_warnings && item.rows_with_warnings > 0) && (
+                          <span className="block text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                            {item.rows_with_warnings} with warnings
+                          </span>
+                        )}
                         <span className="block text-[10px] text-muted">of {item.rows_raw.toLocaleString()} read</span>
                       </td>
                       <td className="px-5 py-4">

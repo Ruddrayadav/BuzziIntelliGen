@@ -41,7 +41,7 @@ from sqlalchemy import func
 from config import settings
 from db.database import get_db, init_db
 from db.models import Expenses, Sales, UploadLog, RejectedRow
-from services.cleaning_service import CleaningResult, clean_dataframe, _parse_money, normalize_category
+from services.cleaning_service import CleaningResult, clean_dataframe, _parse_money, normalize_category, _format_raw_dict
 from services.mapping_service import (
     ColumnMapping,
     apply_mapping,
@@ -146,6 +146,7 @@ class UploadResult:
     clean_revenue: float
     duplicates_removed: int
     invalid_removed: int
+    saved_with_warnings: int = 0
     rejected_rows_detailed: list[dict] = field(default_factory=list)
     rejected_rows_with_revenue_count: int = 0
     rejected_revenue_excluded: float = 0.0
@@ -165,6 +166,8 @@ class UploadResult:
         if self.is_cashbook and self.cashbook_summary:
             return f"✅ Cash-book imported: {self.cashbook_summary}"
         parts = [f"✅ {self.clean_count} rows saved from '{self.filename}'."]
+        if self.saved_with_warnings:
+            parts.append(f"{self.saved_with_warnings} saved with warnings.")
         if self.duplicates_removed:
             parts.append(f"{self.duplicates_removed} duplicates removed.")
         if self.invalid_removed:
@@ -728,16 +731,19 @@ def execute_upload(
         for r in clean_result.rejected_rows:
             idx = r.get("original_index")
             if idx is not None and idx in raw_df.index:
-                orig_row_dict = raw_df.loc[idx].to_dict()
+                orig_series = raw_df.loc[idx]
+                if isinstance(orig_series, pd.DataFrame):
+                    orig_series = orig_series.iloc[0]
+                orig_row_dict = _format_raw_dict(orig_series)
             else:
                 orig_row_dict = r["row"]
             
             # Check if it had valid revenue despite being rejected
-            rev_val = r["row"].get("revenue") or r["row"].get("amount")
-            if pd.notna(rev_val):
+            rev_val = orig_row_dict.get("revenue") or orig_row_dict.get("Revenue") or orig_row_dict.get("amount") or orig_row_dict.get("Amount")
+            if rev_val:
                 try:
-                    f_val = float(rev_val)
-                    if f_val > 0:
+                    f_val = _parse_money(rev_val)
+                    if f_val and f_val > 0:
                         rejected_with_revenue += 1
                         rejected_rev_total += f_val
                 except (ValueError, TypeError):
@@ -762,6 +768,7 @@ def execute_upload(
                 clean_revenue=0.0,
                 duplicates_removed=clean_result.duplicates_removed,
                 invalid_removed=clean_result.invalid_removed,
+                saved_with_warnings=clean_result.saved_with_warnings,
                 rejected_rows_detailed=rejected_detailed,
                 rejected_rows_with_revenue_count=rejected_with_revenue,
                 rejected_revenue_excluded=rejected_rev_total,
@@ -793,7 +800,8 @@ def execute_upload(
                 file_hash=file_hash,
                 row_count_raw=raw_count,
                 row_count_clean=clean_result.clean_count,
-                status="success" if not clean_result.warnings else "partial",
+                rows_with_warnings=clean_result.saved_with_warnings,
+                status="success" if not (clean_result.warnings or clean_result.saved_with_warnings) else "partial",
                 notes="; ".join(clean_result.warnings) if clean_result.warnings else None,
             )
             db.add(upload_log)
@@ -844,6 +852,7 @@ def execute_upload(
             clean_revenue=clean_result.clean_revenue,
             duplicates_removed=clean_result.duplicates_removed,
             invalid_removed=clean_result.invalid_removed,
+            saved_with_warnings=clean_result.saved_with_warnings,
             rejected_rows_detailed=rejected_detailed,
             rejected_rows_with_revenue_count=rejected_with_revenue,
             rejected_revenue_excluded=rejected_rev_total,
@@ -1003,6 +1012,7 @@ def execute_cashbook_upload(
     clean_rev = sales_res.clean_revenue if sales_res else 0.0
     dupes = (sales_res.duplicates_removed if sales_res else 0) + (expenses_res.duplicates_removed if expenses_res else 0)
     invalids = (sales_res.invalid_removed if sales_res else 0) + (expenses_res.invalid_removed if expenses_res else 0)
+    saved_with_warnings = (sales_res.saved_with_warnings if sales_res else 0) + (expenses_res.saved_with_warnings if expenses_res else 0)
     rejected = (sales_res.rejected_rows_detailed if sales_res else []) + (expenses_res.rejected_rows_detailed if expenses_res else [])
     warnings = (sales_res.warnings if sales_res else []) + (expenses_res.warnings if expenses_res else [])
 
@@ -1017,6 +1027,7 @@ def execute_cashbook_upload(
         clean_revenue=clean_rev,
         duplicates_removed=dupes,
         invalid_removed=invalids,
+        saved_with_warnings=saved_with_warnings,
         rejected_rows_detailed=rejected,
         warnings=warnings,
         is_cashbook=True,
@@ -1058,6 +1069,7 @@ def get_upload_history(tenant_id: str) -> list[dict]:
                 "rows_raw": log.row_count_raw or 0,
                 "rows_saved": log.row_count_clean or 0,
                 "rows_skipped": rejected_count,
+                "rows_with_warnings": getattr(log, "rows_with_warnings", 0) or 0,
                 "status": log.status or "success",
                 "notes": log.notes,
                 "has_rejected_rows": rejected_count > 0,

@@ -110,6 +110,9 @@ class UploadLog(Base):
     # How many rows made it through cleaning and were stored?
     row_count_clean = Column(Integer, nullable=True)
 
+    # How many rows were saved with non-fatal warnings (e.g. missing product or category)
+    rows_with_warnings = Column(Integer, nullable=False, default=0)
+
     # "success" | "partial" | "failed"
     status = Column(String(20), nullable=False, default="success")
 

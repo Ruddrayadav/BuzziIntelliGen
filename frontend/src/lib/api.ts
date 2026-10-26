@@ -37,6 +37,7 @@ export type UploadResult = {
   cashbook_summary?: string;
   rows_read: number;
   rows_saved: number;
+  rows_with_warnings?: number;
   rows_skipped: number;
   duplicates_removed: number;
   skipped_rows: Array<{ original_index: number; original_row: Record<string, unknown>; reason: string }>;
@@ -50,6 +51,7 @@ export type UploadHistoryItem = {
   uploaded_at: string | null;
   rows_raw: number;
   rows_saved: number;
+  rows_with_warnings?: number;
   rows_skipped: number;
   status: string;
   notes?: string | null;

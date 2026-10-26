@@ -181,6 +181,9 @@ def _apply_migrations(bind_engine) -> None:
                     conn.execute(text("ALTER TABLE upload_log ADD COLUMN file_hash VARCHAR(64);"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_upload_log_tenant_hash ON upload_log (tenant_id, file_hash);"))
                     conn.commit()
+                if "rows_with_warnings" not in col_names:
+                    conn.execute(text("ALTER TABLE upload_log ADD COLUMN rows_with_warnings INTEGER DEFAULT 0;"))
+                    conn.commit()
     except Exception as exc:
         logger.warning("Database migration check encountered an issue: %s", exc)
 

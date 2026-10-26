@@ -341,7 +341,65 @@ function PreviewTable({ columns, rows }: { columns: string[]; rows: Record<strin
 }
 
 function ReconciliationCard({ result }: { result: UploadResult }) {
-  return <Card className="p-5 sm:p-6"><div className="flex items-start gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200"><Check size={20} /></span><div><p className="font-semibold">{result.filename}</p><p className="mt-1 text-sm text-muted">{result.is_cashbook && result.cashbook_summary ? result.cashbook_summary : "Your import was saved and is ready for the dashboard."}</p></div></div><div className="mt-5 grid gap-3 sm:grid-cols-3"><Count label="Rows in file" value={result.rows_read} /><Count label="Saved" value={result.rows_saved} /><Count label="Skipped" value={result.rows_skipped} /></div>{result.warnings.length > 0 && <p className="mt-4 text-sm text-muted">{result.warnings.join(" ")}</p>}{result.skipped_rows.length > 0 && <details className="mt-5 rounded-xl border p-4"><summary className="cursor-pointer font-semibold">See skipped rows and reasons</summary><div className="mt-4 overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b text-muted"><th className="px-2 py-2">Row</th><th className="px-2 py-2">Reason</th><th className="px-2 py-2">Data</th></tr></thead><tbody>{result.skipped_rows.map((row) => <tr key={row.original_index} className="border-b"><td className="px-2 py-2">{row.original_index + 1}</td><td className="px-2 py-2">{row.reason}</td><td className="px-2 py-2">{Object.entries(row.original_row).map(([key, value]) => `${key}: ${displayValue(value)}`).join(" · ")}</td></tr>)}</tbody></table></div><Button className="mt-4" size="sm" variant="outline" onClick={() => downloadSkippedRows(result)}>Download skipped rows (CSV)</Button></details>}</Card>;
+  const hasWarnings = Boolean(result.rows_with_warnings && result.rows_with_warnings > 0);
+  return (
+    <Card className="p-5 sm:p-6">
+      <div className="flex items-start gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
+          <Check size={20} />
+        </span>
+        <div>
+          <p className="font-semibold">{result.filename}</p>
+          <p className="mt-1 text-sm text-muted">
+            {result.is_cashbook && result.cashbook_summary
+              ? result.cashbook_summary
+              : "Your import was saved and is ready for the dashboard."}
+          </p>
+        </div>
+      </div>
+      <div className={cn("mt-5 grid gap-3", hasWarnings ? "sm:grid-cols-4" : "sm:grid-cols-3")}>
+        <Count label="Rows in file" value={result.rows_read} />
+        <Count label="Saved" value={result.rows_saved} />
+        {hasWarnings && (
+          <Count label="Saved with warnings" value={result.rows_with_warnings!} />
+        )}
+        <Count label="Skipped" value={result.rows_skipped} />
+      </div>
+      {result.warnings.length > 0 && <p className="mt-4 text-sm text-muted">{result.warnings.join(" ")}</p>}
+      {result.skipped_rows.length > 0 && (
+        <details className="mt-5 rounded-xl border p-4">
+          <summary className="cursor-pointer font-semibold">See skipped rows and reasons</summary>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead>
+                <tr className="border-b text-muted">
+                  <th className="px-2 py-2">Row</th>
+                  <th className="px-2 py-2">Reason</th>
+                  <th className="px-2 py-2">Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.skipped_rows.map((row) => (
+                  <tr key={row.original_index} className="border-b">
+                    <td className="px-2 py-2">{row.original_index + 1}</td>
+                    <td className="px-2 py-2">{row.reason}</td>
+                    <td className="px-2 py-2">
+                      {Object.entries(row.original_row)
+                        .map(([key, value]) => `${key}: ${displayValue(value)}`)
+                        .join(" · ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Button className="mt-4" size="sm" variant="outline" onClick={() => downloadSkippedRows(result)}>
+            Download skipped rows (CSV)
+          </Button>
+        </details>
+      )}
+    </Card>
+  );
 }
 
 function Count({ label, value }: { label: string; value: number }) { return <div className="rounded-xl bg-slate-50 p-4 dark:bg-slate-900"><p className="text-sm text-muted">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></div>; }

@@ -168,6 +168,7 @@ async def commit_upload(
         "rows_read": result.raw_count,
         "rows_saved": result.clean_count,
         "rows_skipped": result.invalid_removed,
+        "rows_with_warnings": result.saved_with_warnings,
         "duplicates_removed": result.duplicates_removed,
         "skipped_rows": result.rejected_rows_detailed,
         "warnings": result.warnings,
