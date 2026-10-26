@@ -1,0 +1,70 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: bizintel-ollama
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: bizintel-ollama-pull
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - LLM_MODEL=${LLM_MODEL:-gemma3:4b}
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "echo 'Pulling model:' $${LLM_MODEL:-gemma3:4b} &&
+       ollama pull $${LLM_MODEL:-gemma3:4b} &&
+       echo 'Model ready.' &&
+       exit 0"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bizintel-api
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DB_URL=sqlite:////app/data/biz_intelligence.db
+      - LLM_MODEL=${LLM_MODEL:-gemma3:4b}
+      - OLLAMA_BASE_URL=http://ollama:11434
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/docs || python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')\" || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: bizintel-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  ollama_models:
