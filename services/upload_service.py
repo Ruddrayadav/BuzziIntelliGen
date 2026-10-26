@@ -228,8 +228,11 @@ def read_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
         Raw DataFrame with all original columns. No cleaning yet.
 
     Raises:
-        ValueError: If the file cannot be parsed.
+        ValueError: If the file cannot be parsed, is corrupt, or is empty.
     """
+    if not file_bytes or not file_bytes.strip():
+        raise ValueError(f"The file '{filename}' is empty. Please upload a file containing data.")
+
     ext = Path(filename).suffix.lower()
     buffer = io.BytesIO(file_bytes)
 
@@ -243,22 +246,40 @@ def read_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 df = pd.read_csv(buffer, encoding="latin-1")
                 logger.warning("File %s read with latin-1 encoding fallback", filename)
 
+            # Semicolon-separated CSV auto-detection
+            if len(df.columns) == 1 and ";" in str(df.columns[0]):
+                buffer.seek(0)
+                try:
+                    df = pd.read_csv(buffer, sep=";", encoding="utf-8")
+                except UnicodeDecodeError:
+                    buffer.seek(0)
+                    df = pd.read_csv(buffer, sep=";", encoding="latin-1")
+                logger.info("Detected semicolon delimiter for %s — parsed %d columns", filename, len(df.columns))
+
         elif ext in (".xlsx", ".xls"):
             df = pd.read_excel(buffer, engine="openpyxl" if ext == ".xlsx" else "xlrd")
 
         else:
-            raise ValueError(f"Unsupported extension: {ext}")
+            raise ValueError(f"Unsupported file format '{ext}'. Please upload a CSV or Excel file.")
 
     except Exception as exc:
         if isinstance(exc, ValueError):
             raise
+        logger.warning("Failed to parse file '%s': %s", filename, exc)
+        file_type_name = "CSV" if ext == ".csv" else "Excel" if ext in (".xlsx", ".xls") else ext.upper().lstrip(".")
         raise ValueError(
-            f"Could not read '{filename}'. Is it a valid {ext} file? "
-            f"Detail: {exc}"
-        ) from exc
+            f"Could not read '{filename}'. The file appears to be corrupted or not a valid {file_type_name} file. "
+            "Please check the file and try again."
+        ) from None
 
-    if df.empty:
-        raise ValueError(f"'{filename}' appears to be empty — no rows found.")
+    if len(df.columns) == 0:
+        raise ValueError(f"The file '{filename}' is empty. Please upload a file containing data.")
+
+    if len(df) == 0:
+        raise ValueError(
+            f"The file '{filename}' contains only column headers and no data rows. "
+            "Please upload a file with transaction records."
+        )
 
     logger.info("File read: %s — %d rows, %d columns", filename, len(df), len(df.columns))
     return df

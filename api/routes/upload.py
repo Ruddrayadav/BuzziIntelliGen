@@ -73,6 +73,11 @@ async def preview_upload(
         file_hash = hashlib.sha256(file_bytes).hexdigest()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not read '{filename}'. Please check that it is a valid, uncorrupted CSV or Excel file.",
+        )
 
     return to_jsonable({
         "filename": preview.filename,
@@ -136,6 +141,11 @@ async def commit_upload(
             )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not read '{filename}'. Please check that it is a valid, uncorrupted CSV or Excel file.",
+        )
 
     if not result.success:
         if result.is_duplicate:

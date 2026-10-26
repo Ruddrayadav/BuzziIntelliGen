@@ -28,6 +28,7 @@ sqlalchemy>=2.0.0           # ORM + query builder; abstracts SQLite/PostgreSQL
 # ── Settings ─────────────────────────────────────────────────
 pydantic>=2.0.0             # Data validation and typed settings
 pydantic-settings>=2.0.0   # BaseSettings — reads from .env files
+python-dotenv>=1.0.0        # Reads key-value pairs from .env file
 
 # ── LLM / AI ─────────────────────────────────────────────────
 langchain>=0.2.0            # Prompt templates + structured output parsing only
