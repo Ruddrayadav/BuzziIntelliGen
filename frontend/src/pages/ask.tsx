@@ -140,7 +140,9 @@ export function AskPage() {
           error: true,
           text:
             reason instanceof ApiError
-              ? reason.message
+              ? reason.status === 503
+                ? "The AI model is still starting or not running. Try again in a minute."
+                : reason.message
               : "I could not get an answer right now. Please try again.",
         },
       ]);
